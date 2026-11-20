@@ -751,3 +751,96 @@ ventana.state('zoomed')
 ventana.configure(bg=BEIGE)
 pantalla_login()
 ventana.mainloop()
+
+
+
+
+
+# Cambio de Marco Abraham - marcoabraham6090
+# CREATE DATABASE IF NOT EXISTS alerta_temprana;
+# USE alerta_temprana;
+#
+# CREATE TABLE IF NOT EXISTS grados (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   nombre VARCHAR(50) NOT NULL,
+#   total_alumnos INT DEFAULT 0
+# );
+#
+# CREATE TABLE IF NOT EXISTS alumnos (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   grado_id INT NOT NULL,
+#   numero_lista INT NOT NULL,
+#   nombre_completo VARCHAR(150) NOT NULL,
+#   FOREIGN KEY (grado_id) REFERENCES grados(id) ON DELETE CASCADE,
+#   UNIQUE KEY uq_lista (grado_id, numero_lista)
+# );
+#
+# CREATE TABLE IF NOT EXISTS usuarios (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   nombre VARCHAR(100) NOT NULL,
+#   usuario VARCHAR(50) NOT NULL UNIQUE,
+#   password VARCHAR(50) NOT NULL,
+#   rol VARCHAR(20) NOT NULL,
+#   grupo_asignado VARCHAR(50) DEFAULT ''
+# );
+#
+# CREATE TABLE IF NOT EXISTS asistencia (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   alumno_id INT NOT NULL,
+#   fecha DATE NOT NULL,
+#   hora_llegada VARCHAR(20),
+#   estado VARCHAR(20),
+#   tiene_incidencia TINYINT(1) DEFAULT 0,
+#   FOREIGN KEY (alumno_id) REFERENCES alumnos(id) ON DELETE CASCADE,
+#   UNIQUE KEY uq_asist (alumno_id, fecha)
+# );
+#
+# CREATE TABLE IF NOT EXISTS justificantes (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   alumno_nombre VARCHAR(150),
+#   grado_grupo VARCHAR(50),
+#   docente VARCHAR(100),
+#   fecha_falta DATE,
+#   num_dias INT DEFAULT 1,
+#   motivo VARCHAR(50),
+#   descripcion TEXT,
+#   tutor VARCHAR(100),
+#   telefono VARCHAR(20),
+#   fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+# );
+#
+# CREATE TABLE IF NOT EXISTS reportes_alerta (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   alumno_nombre VARCHAR(150),
+#   grado_grupo VARCHAR(50),
+#   docente VARCHAR(100),
+#   fecha DATE,
+#   tipo VARCHAR(50),
+#   nivel_riesgo VARCHAR(20),
+#   descripcion TEXT,
+#   accion_propuesta TEXT,
+#   generar_apercibimiento TINYINT(1) DEFAULT 0,
+#   generar_plan TINYINT(1) DEFAULT 0,
+#   fecha_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+# );
+#
+# CREATE TABLE IF NOT EXISTS control_docente (
+#   id INT AUTO_INCREMENT PRIMARY KEY,
+#   docente VARCHAR(100),
+#   materia_grupo VARCHAR(100),
+#   estado VARCHAR(20),
+#   fecha_hora DATETIME
+# );
+#
+# INSERT INTO grados (nombre, total_alumnos) VALUES
+# ('1° Primaria',0),('2° Primaria',0),('3° Primaria',0),
+# ('4° Primaria',0),('5° Primaria',0),('6° Primaria',0);
+#
+# INSERT INTO usuarios (nombre, usuario, password, rol, grupo_asignado) VALUES
+# ('Director General','director','DIR123','director',''),
+# ('Profa. Ana','ana.1a','ANA-1A-2026','docente','1° Primaria'),
+# ('Profe. Luis','luis.2b','LUIS-2B-2026','docente','2° Primaria'),
+# ('Profa. María','maria.3a','MARIA-3A-2026','docente','3° Primaria'),
+# ('Profe. José','jose.4a','JOSE-4A-2026','docente','4° Primaria'),
+# ('Profe. Pedro','pedro.5a','PEDRO-5A-2026','docente','5° Primaria'),
+# ('Profa. Sofía','sofia.6a','SOFIA-6A-2026','docente','6° Primaria');
