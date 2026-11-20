@@ -111,6 +111,37 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
     except Exception as e:
         messagebox.showerror("Error Excel", str(e)); return False
 
+# ============ NUEVO: AGREGAR UN ALUMNO ============
+def agregar_un_alumno(nombre, grado, numero_lista):
+    nombre = nombre.strip(); grado = grado.strip()
+    if not nombre or not grado:
+        messagebox.showwarning("Falta dato", "Escribe nombre y grado"); return False
+    try:
+        con = conectar(); cur = con.cursor()
+        cur.execute("SELECT id FROM grados WHERE nombre=%s", (grado,))
+        r = cur.fetchone()
+        if r: gid = r[0]
+        else:
+            cur.execute("INSERT INTO grados (nombre, total_alumnos) VALUES (%s,0)", (grado,))
+            gid = cur.lastrowid
+        if numero_lista == 0 or numero_lista == "":
+            cur.execute("SELECT COALESCE(MAX(numero_lista),0)+1 FROM alumnos WHERE grado_id=%s", (gid,))
+            numero_lista = cur.fetchone()[0]
+        else:
+            numero_lista = int(numero_lista)
+            cur.execute("SELECT id FROM alumnos WHERE grado_id=%s AND numero_lista=%s", (gid, numero_lista))
+            if cur.fetchone():
+                messagebox.showerror("Duplicado", f"Ya existe el número {numero_lista} en {grado}")
+                con.close(); return False
+        cur.execute("INSERT INTO alumnos (grado_id, numero_lista, nombre_completo) VALUES (%s,%s,%s)", (gid, numero_lista, nombre))
+        cur.execute("UPDATE grados SET total_alumnos=(SELECT COUNT(*) FROM alumnos WHERE grado_id=%s) WHERE id=%s", (gid, gid))
+        con.commit(); con.close()
+        cargar_datos_db()
+        messagebox.showinfo("Guardado", f"Alumno {nombre} agregado a {grado} con número {numero_lista}. Ya le aparece al docente.")
+        return True
+    except Exception as e:
+        messagebox.showerror("Error DB", str(e)); return False
+
 GUINDA = "#4E0F27"; DORADO = "#C9A86A"; BEIGE = "#F5E6D3"; BLANCO = "#FDF8F0"; BEIGE_CLARO = "#F5F0E6"; BORDER = "#D9C5A0"
 GRADOS = cargar_datos_db()
 GRADO_ACTUAL = None; ESTADOS = {}; ESTADOS_INC = {}
@@ -636,6 +667,27 @@ def vista_directivo():
         lbl_status.pack(fill="x", padx=20, pady=10); lista.pack(fill="both", expand=True, padx=20, pady=5); actualizar()
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
+    # ===== NUEVO: VISTA AGREGAR ALUMNO (DIRECTOR) =====
+    def vista_agregar_alumno(parent):
+        tk.Label(parent, text="➕ Agregar Alumno", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
+        tk.Label(parent, text="El alumno que agregues aquí le aparecerá al docente en su lista de asistencia.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,15))
+        card = tk.Frame(parent, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=20, pady=20)
+        card.pack(fill="x", padx=25, pady=10)
+        tk.Label(card, text="Nombre completo del alumno:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        entry_nombre = tk.Entry(card, font=("Segoe UI", 12)); entry_nombre.pack(fill="x", ipady=8, pady=6)
+        tk.Label(card, text="Grado:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(8,0))
+        grado_var = tk.StringVar(value="1° Primaria")
+        ttk.Combobox(card, textvariable=grado_var, values=list(GRADOS.keys()) if GRADOS else ["1° Primaria","2° Primaria","3° Primaria","4° Primaria","5° Primaria","6° Primaria"], font=("Segoe UI", 11), state="readonly").pack(fill="x", ipady=4, pady=6)
+        tk.Label(card, text="Número de lista (déjalo vacío para asignar automático):", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(8,0))
+        entry_num = tk.Entry(card, font=("Segoe UI", 12)); entry_num.pack(fill="x", ipady=8, pady=6)
+        def guardar():
+            try: num = int(entry_num.get().strip()) if entry_num.get().strip() else 0
+            except: num = 0
+            if agregar_un_alumno(entry_nombre.get(), grado_var.get(), num):
+                entry_nombre.delete(0,"end"); entry_num.delete(0,"end")
+        tk.Button(card, text="AGREGAR ALUMNO", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=guardar).pack(fill="x", pady=12)
+        tk.Label(card, text="Tip: si no escribes número de lista, se le asigna el siguiente disponible.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 9)).pack(anchor="w")
+
     # ===== NUEVO: VISTA CARGA MASIVA (DIRECTOR) =====
     def vista_carga_masiva(parent):
         tk.Label(parent, text="📂 Carga Masiva de Excel", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
@@ -677,6 +729,7 @@ def vista_directivo():
         elif op == "Actividad": vista_actividad_docente(contenido)
         elif op == "Docentes": vista_control_docentes(contenido)
         elif op == "Reportes": vista_reportes_director(contenido)
+        elif op == "AgregarAlumno": vista_agregar_alumno(contenido)
         elif op == "CargaMasiva": vista_carga_masiva(contenido)
         else: tk.Label(contenido, text=f"{op}\n\nMódulo en desarrollo", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 16, "bold")).pack(pady=50)
     def btn_menu(texto, op, color=BLANCO):
@@ -687,6 +740,7 @@ def vista_directivo():
     btn_menu("Actividad Docente", "Actividad", DORADO)
     btn_menu("Docentes", "Docentes")
     btn_menu("Reportes", "Reportes")
+    btn_menu("➕ Agregar Alumno", "AgregarAlumno")
     btn_menu("📂 Carga Masiva Excel", "CargaMasiva")
     btn_menu("Configuración", "Config")
     tk.Button(menu, text="  Cerrar Sesión", bg="#611232", fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
