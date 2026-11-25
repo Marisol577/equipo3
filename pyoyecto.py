@@ -1,3 +1,4 @@
+
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 from datetime import datetime
@@ -39,7 +40,6 @@ def cargar_nombres_alumnos():
                 nombres.append(a.split(" ",1)[1] if " " in a else a)
         return nombres
 
-# ============ NUEVO: CARGA MASIVA EXCEL ============
 def cargar_masiva_excel(ruta_excel, lbl_status=None):
     if openpyxl is None:
         messagebox.showerror("Falta librería", "Instala openpyxl: pip install openpyxl")
@@ -50,9 +50,7 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
         filas = list(ws.iter_rows(values_only=True))
         if not filas:
             messagebox.showwarning("Vacío", "El Excel está vacío"); return False
-        # Detectar encabezados
         header = [str(c).strip().lower() if c else "" for c in filas[0]]
-        # Buscar columnas: grado, numero_lista, nombre
         idx_grado = -1; idx_num = -1; idx_nombre = -1
         for i, h in enumerate(header):
             if "grado" in h: idx_grado = i
@@ -73,17 +71,13 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
             datos_excel.append((grado, num, nombre))
         if not datos_excel:
             messagebox.showwarning("Sin datos", "No encontré alumnos en el Excel"); return False
-        # Confirmar borrado
         if not messagebox.askyesno("¿Borrar todo?", f"Se van a BORRAR todos los alumnos actuales y se van a cargar {len(datos_excel)} alumnos nuevos del Excel.\n¿Estás seguro?"):
             return False
         con = conectar(); cur = con.cursor()
-        # BORRAR TODO: asistencia depende de alumnos, por FK con CASCADE se borra solo, pero limpiamos explícito
         cur.execute("DELETE FROM asistencia")
         cur.execute("DELETE FROM alumnos")
-        # Si numero_lista es 0, asignar consecutivo por grado
         contadores = {}
         for grado, num, nombre in datos_excel:
-            # Buscar o crear grado
             cur.execute("SELECT id FROM grados WHERE nombre=%s", (grado,))
             r = cur.fetchone()
             if r: gid = r[0]
@@ -94,16 +88,13 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
                 contadores[grado] = contadores.get(grado, 0) + 1
                 num = contadores[grado]
             else:
-                # Evitar duplicado de numero_lista en mismo grado
                 cur.execute("SELECT id FROM alumnos WHERE grado_id=%s AND numero_lista=%s", (gid, num))
                 if cur.fetchone():
                     contadores[grado] = contadores.get(grado, 0) + 1
                     num = 1000 + contadores[grado]
             cur.execute("INSERT INTO alumnos (grado_id, numero_lista, nombre_completo) VALUES (%s,%s,%s)", (gid, num, nombre))
-        # Actualizar totales
         cur.execute("UPDATE grados g SET total_alumnos = (SELECT COUNT(*) FROM alumnos a WHERE a.grado_id=g.id)")
         con.commit(); con.close()
-        # Recargar en memoria para que a los docentes ya les aparezca
         cargar_datos_db()
         messagebox.showinfo("Listo", f"Carga masiva exitosa: {len(datos_excel)} alumnos cargados. Se borraron los anteriores.")
         if lbl_status: lbl_status.config(text=f"✅ {len(datos_excel)} alumnos cargados")
@@ -111,7 +102,6 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
     except Exception as e:
         messagebox.showerror("Error Excel", str(e)); return False
 
-# ============ NUEVO: AGREGAR UN ALUMNO ============
 def agregar_un_alumno(nombre, grado, numero_lista):
     nombre = nombre.strip(); grado = grado.strip()
     if not nombre or not grado:
@@ -146,6 +136,112 @@ GUINDA = "#4E0F27"; DORADO = "#C9A86A"; BEIGE = "#F5E6D3"; BLANCO = "#FDF8F0"; B
 GRADOS = cargar_datos_db()
 GRADO_ACTUAL = None; ESTADOS = {}; ESTADOS_INC = {}
 USUARIO_ACTUAL = {"nombre": "", "usuario": "", "rol": "", "grupo": ""}
+
+# ===== MOTOR DE ALERTAS - PUNTO 1 - CAMPANITA =====
+ALERTAS = []
+FILTRO_ALERTA = ["todas"]
+RENDER_CAMPANITA = [None]
+
+def cargar_alertas_db():
+    global ALERTAS
+    try:
+        con = conectar(); cur = con.cursor(dictionary=True)
+        cur.execute("SELECT * FROM reportes_alerta ORDER BY fecha DESC LIMIT 20")
+        rows = cur.fetchall()
+        con.close()
+        ALERTAS = []
+        for r in rows:
+            t = str(r.get('tipo',''))
+            if "Retardo" in t: tipo = "retardo"
+            elif "tarea" in t.lower() or "Tarea" in t: tipo = "tarea"
+            else: tipo = "falta"
+            ALERTAS.append({"tipo": tipo, "alumno": f"{r.get('alumno_nombre','')} - {r.get('grado_grupo','')}", "texto": f"{r.get('tipo','')} | Riesgo {r.get('nivel_riesgo','')} | {r.get('descripcion','')}", "hora": str(r.get('fecha','')), "leida": False})
+        if not ALERTAS:
+            ALERTAS = [
+                {"tipo":"falta","alumno":"María López - 3° A","texto":"Falta 3 días seguidos sin justificante","hora":"Hace 10 min","leida":False},
+                {"tipo":"retardo","alumno":"Carlos Ruiz - 4° B","texto":"Retardo por 4ta vez esta semana","hora":"Hace 32 min","leida":False},
+                {"tipo":"tarea","alumno":"Ana Torres - 5° A","texto":"No entregó tarea de matemáticas","hora":"Hace 1 hora","leida":False},
+            ]
+    except:
+        ALERTAS = [
+            {"tipo":"falta","alumno":"María López - 3° A","texto":"Falta 3 días seguidos","hora":"Hace 10 min","leida":False},
+            {"tipo":"retardo","alumno":"Carlos Ruiz - 4° B","texto":"Retardo 4ta vez","hora":"Hace 32 min","leida":False},
+            {"tipo":"tarea","alumno":"Ana Torres - 5° A","texto":"No entregó tarea","hora":"Hace 1 hora","leida":False},
+        ]
+
+def color_por_tipo(tipo):
+    if tipo == "falta": return "#e53935"
+    if tipo == "retardo": return "#FFC107"
+    return "#FF9800"
+
+def agregar_alerta_nueva(tipo, alumno, texto):
+    ALERTAS.insert(0, {"tipo":tipo, "alumno":alumno, "texto":texto, "hora":"Ahora mismo", "leida":False})
+    if RENDER_CAMPANITA[0]:
+        try: RENDER_CAMPANITA[0]()
+        except: pass
+
+def crear_campanita(parent_header):
+    cargar_alertas_db()
+    frame = tk.Frame(parent_header, bg="#611232")
+    frame.pack(side="right", padx=10)
+    lbl_cont = tk.Label(frame, text="3", bg="#e53935", fg="white", font=("Segoe UI", 8, "bold"), width=2)
+    lbl_cont.place(x=28, y=0)
+    panel = tk.Frame(ventana, bg=BLANCO, highlightbackground=DORADO, highlightthickness=2, width=380, height=380)
+    titulo = tk.Frame(panel, bg=GUINDA)
+    titulo.pack(fill="x")
+    tk.Label(titulo, text="  🔔 Alertas", bg=GUINDA, fg="white", font=("Segoe UI", 11, "bold")).pack(side="left", pady=8)
+    def marcar_todas():
+        for a in ALERTAS: a["leida"] = True
+        render()
+    tk.Button(titulo, text="Marcar todas leídas", bg=DORADO, fg=GUINDA, font=("Segoe UI", 8, "bold"), relief="flat", command=marcar_todas).pack(side="right", padx=5)
+    filtros = tk.Frame(panel, bg=BLANCO)
+    filtros.pack(fill="x", pady=5)
+    btns = {}
+    def filtrar(t):
+        FILTRO_ALERTA[0] = t
+        for k,b in btns.items():
+            b.config(bg=GUINDA if k==t else "#f0f0f0", fg="white" if k==t else "black")
+        render()
+    for txt, t in [("Todas","todas"),("🔴 Falta","falta"),("🟡 Retardo","retardo"),("🟠 Tarea","tarea")]:
+        b = tk.Button(filtros, text=txt, bg="#f0f0f0", font=("Segoe UI", 8), relief="flat", command=lambda tt=t: filtrar(tt))
+        b.pack(side="left", padx=3)
+        btns[t] = b
+    lista_frame = tk.Frame(panel, bg=BLANCO)
+    lista_frame.pack(fill="both", expand=True)
+    def render():
+        for w in lista_frame.winfo_children(): w.destroy()
+        filtradas = [a for a in ALERTAS if FILTRO_ALERTA[0]=="todas" or a["tipo"]==FILTRO_ALERTA[0]]
+        if not filtradas:
+            tk.Label(lista_frame, text="No hay alertas de este tipo ✅", bg=BLANCO, fg="gray").pack(pady=20)
+        for a in filtradas:
+            f = tk.Frame(lista_frame, bg="#FFF3E0" if not a["leida"] else BLANCO, bd=1, relief="solid")
+            f.pack(fill="x", padx=8, pady=4)
+            tk.Label(f, text="●", fg=color_por_tipo(a["tipo"]), bg=f["bg"], font=("Arial", 14)).pack(side="left", padx=5)
+            lbl = tk.Label(f, text=f"{a['alumno']}\n{a['texto']}\n{a['hora']}", bg=f["bg"], font=("Segoe UI", 9), justify="left", wraplength=300)
+            lbl.pack(side="left", fill="x", expand=True, pady=5)
+            def abrir(al=a):
+                al["leida"] = True
+                render()
+                messagebox.showinfo("Alerta", f"{al['alumno']}\n{al['texto']}")
+            f.bind("<Button-1>", lambda e, al=a: abrir(al))
+            lbl.bind("<Button-1>", lambda e, al=a: abrir(al))
+        sin_leer = len([a for a in ALERTAS if not a["leida"]])
+        lbl_cont.config(text=str(sin_leer))
+        if sin_leer == 0:
+            lbl_cont.place_forget()
+        else:
+            lbl_cont.place(x=28, y=0)
+    RENDER_CAMPANITA[0] = render
+    visible = [False]
+    def toggle():
+        if visible[0]:
+            panel.place_forget(); visible[0] = False
+        else:
+            panel.place(x=ventana.winfo_width()-400, y=65, width=380, height=380); visible[0] = True
+    btn = tk.Button(frame, text="🔔", bg="white", font=("Arial", 16), relief="flat", width=2, command=toggle)
+    btn.pack()
+    render()
+    return frame
 
 DOCENTES_RAPIDOS = [
     ("👩‍🏫  Profa. Ana  •  1° Primaria", "ana.1a", "ANA-1A-2026"),
@@ -251,6 +347,12 @@ def vista_docente():
     for g in GRADOS:
         ESTADOS[g] = {a: tk.StringVar(value="Asistio") for a in GRADOS[g]}
         ESTADOS_INC[g] = {a: tk.BooleanVar(value=False) for a in GRADOS[g]}
+    # HEADER SUPERIOR CON CAMPANITA - PUNTO 1
+    header_top = tk.Frame(ventana, bg="#611232", height=55)
+    header_top.pack(side="top", fill="x"); header_top.pack_propagate(False)
+    tk.Label(header_top, text=f"  {USUARIO_ACTUAL['nombre']} • {USUARIO_ACTUAL['grupo']}", bg="#611232", fg="white", font=("Segoe UI", 11, "bold")).pack(side="left", pady=12)
+    tk.Label(header_top, text="Alerta Temprana", bg="#611232", fg=DORADO, font=("Segoe UI", 9)).pack(side="left", padx=10)
+    crear_campanita(header_top)
     menu = tk.Frame(ventana, bg=GUINDA, width=290); menu.pack(side="left", fill="y"); menu.pack_propagate(False)
     tk.Label(menu, text="DOCENTE\nPANEL", bg=GUINDA, fg=BLANCO, font=("Segoe UI", 18, "bold"), justify="left").pack(anchor="w", padx=20, pady=20)
     tk.Frame(menu, bg=DORADO, height=3, width=60).pack(anchor="w", padx=20, pady=5)
@@ -371,7 +473,10 @@ def vista_docente():
                 cur.execute("INSERT INTO reportes_alerta (alumno_nombre, grado_grupo, docente, fecha, tipo, nivel_riesgo, descripcion, accion_propuesta, generar_apercibimiento, generar_plan) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (alumno_var.get(), grado_var.get(), docente_var.get(), fecha_db, tipo_var.get(), riesgo_var.get(), descripcion.get("1.0","end").strip(), accion.get("1.0","end").strip(), int(apercibimiento_var.get()), int(apoyo_var.get())))
                 con.commit(); con.close()
-                messagebox.showinfo("Guardado", "Reporte guardado en la base de datos")
+                # CAMPANITA: disparar alerta al director/docente
+                tipo_camp = "falta" if tipo_var.get()=="Inasistencia" else "retardo" if tipo_var.get()=="Retardo" else "tarea"
+                agregar_alerta_nueva(tipo_camp, f"{alumno_var.get()} - {grado_var.get()}", f"{tipo_var.get()} | Riesgo {riesgo_var.get()} | {descripcion.get('1.0','end').strip()}")
+                messagebox.showinfo("Guardado", "Reporte guardado y alerta enviada 🔔")
             except Exception as e: messagebox.showerror("Error DB", str(e))
         botones = tk.Frame(contenedor, bg="#FFF8FA"); botones.pack(pady=18)
         tk.Button(botones, text="GENERAR REPORTE", bg="#611232", fg="white", font=("Arial", 12, "bold"), padx=25, pady=10, bd=0, command=generar_r).pack(side="left", padx=10)
@@ -473,9 +578,14 @@ def vista_docente():
     tk.Button(menu, text="  Cerrar Sesión", bg=GUINDA, fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
     mostrar_opcion("Mi Grupo", botones_docente[0])
 
-# ===== DIRECTOR =====
 def vista_directivo():
     limpiar(); ventana.configure(bg=BLANCO)
+    # HEADER SUPERIOR CON CAMPANITA - PUNTO 1
+    header_top = tk.Frame(ventana, bg="#611232", height=55)
+    header_top.pack(side="top", fill="x"); header_top.pack_propagate(False)
+    tk.Label(header_top, text=f"  Director: {USUARIO_ACTUAL['nombre']}", bg="#611232", fg="white", font=("Segoe UI", 11, "bold")).pack(side="left", pady=12)
+    tk.Label(header_top, text="Panel Directivo", bg="#611232", fg=DORADO, font=("Segoe UI", 9)).pack(side="left", padx=10)
+    crear_campanita(header_top)
     menu = tk.Frame(ventana, bg="#611232", width=280); menu.pack(side="left", fill="y"); menu.pack_propagate(False)
     tk.Label(menu, text="DIRECTOR\nPANEL", bg="#611232", fg=BLANCO, font=("Segoe UI", 18, "bold"), justify="left").pack(anchor="w", padx=20, pady=20)
     tk.Frame(menu, bg=DORADO, height=3, width=60).pack(anchor="w", padx=20, pady=5)
@@ -667,7 +777,6 @@ def vista_directivo():
         lbl_status.pack(fill="x", padx=20, pady=10); lista.pack(fill="both", expand=True, padx=20, pady=5); actualizar()
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-    # ===== NUEVO: VISTA AGREGAR ALUMNO (DIRECTOR) =====
     def vista_agregar_alumno(parent):
         tk.Label(parent, text="➕ Agregar Alumno", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
         tk.Label(parent, text="El alumno que agregues aquí le aparecerá al docente en su lista de asistencia.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,15))
@@ -688,7 +797,6 @@ def vista_directivo():
         tk.Button(card, text="AGREGAR ALUMNO", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=guardar).pack(fill="x", pady=12)
         tk.Label(card, text="Tip: si no escribes número de lista, se le asigna el siguiente disponible.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 9)).pack(anchor="w")
 
-    # ===== NUEVO: VISTA CARGA MASIVA (DIRECTOR) =====
     def vista_carga_masiva(parent):
         tk.Label(parent, text="📂 Carga Masiva de Excel", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
         tk.Label(parent, text="Sube un Excel y reemplaza TODOS los alumnos actuales.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,5))
@@ -710,7 +818,6 @@ def vista_directivo():
             cargar_masiva_excel(ruta_var["ruta"], lbl_status)
         tk.Button(card, text="📂 ELEGIR EXCEL", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 11, "bold"), bd=0, pady=10, command=elegir).pack(fill="x", pady=6)
         tk.Button(card, text="🚀 CARGAR Y REEMPLAZAR TODO", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=cargar).pack(fill="x", pady=6)
-        # Mostrar conteo actual
         try:
             con = conectar(); cur = con.cursor()
             cur.execute("SELECT COUNT(*) FROM alumnos"); total = cur.fetchone()[0]; con.close()
@@ -743,15 +850,7 @@ def vista_directivo():
     btn_menu("➕ Agregar Alumno", "AgregarAlumno")
     btn_menu("📂 Carga Masiva Excel", "CargaMasiva")
     btn_menu("Configuración", "Config")
-    tk.Button(menu, text="  Cerrar Sesión", bg="#611232", fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
-    mostrar_director("Resumen", botones_director[0])
-
-ventana = tk.Tk()
-ventana.state('zoomed')
-ventana.configure(bg=BEIGE)
-pantalla_login()
-ventana.mainloop()
-
+    tk.Button(menu, text="  Cerrar Sesión", bg="#611232", fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x
 
 
 
