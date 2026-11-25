@@ -1,3 +1,11 @@
+'''
+1.- No esta agregado aqui el script de la base de datos para yo poderlo copiar y pegar en xampp y crear la base de datos, 
+para poder continuar con la revisión y hacer pruebas.
+2.- Por seguridad no se puede mostrar los datos de los usuarios, ya que se esta mostrando el usuario y 
+la contraseña en el login, esto no es correcto.
+'''
+
+
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 from datetime import datetime
