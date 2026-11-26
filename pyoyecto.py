@@ -14,8 +14,24 @@ except:
 def conectar():
     return mysql.connector.connect(host="localhost", user="root", password="", database="alerta_temprana")
 
+# ============ CREAR CUENTA - LA CHIDA CON APROBACIÓN ============
+CODIGO_DIRECTOR = "DIR2026"
+
+def asegurar_columna_estado():
+    try:
+        con = conectar(); cur = con.cursor()
+        cur.execute("SHOW COLUMNS FROM usuarios LIKE 'estado'")
+        if not cur.fetchone():
+            cur.execute("ALTER TABLE usuarios ADD COLUMN estado VARCHAR(20) DEFAULT 'aprobado'")
+            cur.execute("UPDATE usuarios SET estado='aprobado' WHERE estado IS NULL OR estado=''")
+            con.commit()
+        con.close()
+    except Exception as e:
+        print("Error estado:", e)
+
 def cargar_datos_db():
     global GRADOS, GRADO_IDS, datos
+    asegurar_columna_estado()
     con = conectar(); cur = con.cursor(dictionary=True)
     cur.execute("SELECT * FROM grados ORDER BY id")
     grados_db = cur.fetchall()
@@ -42,7 +58,7 @@ def cargar_nombres_alumnos():
                 nombres.append(a.split(" ",1)[1] if " " in a else a)
         return nombres
 
-# ============ PUNTO 1: CARGA MASIVA EXCEL - ALUMNOS + DOCENTES EN EL MISMO EXCEL ============
+# ============ CARGA MASIVA EXCEL - ALUMNOS + DOCENTES EN EL MISMO EXCEL ============
 def cargar_masiva_excel(ruta_excel, lbl_status=None):
     if openpyxl is None:
         messagebox.showerror("Falta librería", "Instala openpyxl: pip install openpyxl")
@@ -129,9 +145,9 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
         for nombre_d, usuario_d, password_d, rol_d, grupo_d in datos_docentes:
             cur.execute("SELECT id FROM usuarios WHERE usuario=%s", (usuario_d,))
             if cur.fetchone():
-                cur.execute("UPDATE usuarios SET nombre=%s, password=%s, rol=%s, grupo_asignado=%s WHERE usuario=%s", (nombre_d, password_d, rol_d, grupo_d, usuario_d))
+                cur.execute("UPDATE usuarios SET nombre=%s, password=%s, rol=%s, grupo_asignado=%s, estado='aprobado' WHERE usuario=%s", (nombre_d, password_d, rol_d, grupo_d, usuario_d))
             else:
-                cur.execute("INSERT INTO usuarios (nombre, usuario, password, rol, grupo_asignado) VALUES (%s,%s,%s,%s,%s)", (nombre_d, usuario_d, password_d, rol_d, grupo_d))
+                cur.execute("INSERT INTO usuarios (nombre, usuario, password, rol, grupo_asignado, estado) VALUES (%s,%s,%s,%s,%s,'aprobado')", (nombre_d, usuario_d, password_d, rol_d, grupo_d))
         con.commit(); con.close()
         cargar_datos_db()
         messagebox.showinfo("Listo", f"Carga masiva exitosa: {len(datos_excel)} alumnos + {len(datos_docentes)} docentes cargados del mismo Excel.")
@@ -261,8 +277,6 @@ def vista_diccionario(parent):
     cargar_lista()
 
 # ============ MOTOR DE ALERTAS A BASE DE CONDUCTAS + DASHBOARD KPIs ============
-# Campana arriba a la derecha con colores: 🔴 Alto, 🟡 Medio, 🟢 Verde
-# Al abrirla aparecen las alertas, ya sea de FALTA o EVIDENCIA / CONDUCTA
 def obtener_alertas_activas():
     alertas = []
     try:
@@ -331,8 +345,9 @@ def vista_dashboard_kpis(parent):
         cur.execute("SELECT COUNT(*) FROM asistencia WHERE fecha=CURRENT_DATE AND estado='Retardo'"); ret = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM reportes_alerta WHERE nivel_riesgo='Alto'"); alto = cur.fetchone()[0]
         cur.execute("SELECT COUNT(*) FROM justificantes"); just = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM usuarios WHERE estado='pendiente'"); pendientes = cur.fetchone()[0]
         con.close()
-    except: total_alumnos, asist, falt, ret, alto, just = 0,0,0,0,0,0
+    except: total_alumnos, asist, falt, ret, alto, just, pendientes = 0,0,0,0,0,0,0
     porc_asist = round((asist / total_alumnos * 100),1) if total_alumnos>0 else 0
     kpi = tk.Frame(parent, bg=BLANCO); kpi.pack(fill="x", padx=25, pady=5)
     datos_kpi = [("👨‍🎓 TOTAL ALUMNOS", total_alumnos, GUINDA, "En el sistema"), ("✅ ASISTENCIA HOY", f"{asist}  ({porc_asist}%)", "#2E7D32", "Presentes hoy"), ("❌ FALTAS HOY", falt, "#B22222", "Sin justificar"), ("⏰ RETARDOS", ret, "#C9A86A", "Llegaron tarde"), ("🔴 ALERTAS ALTAS", alto, "#B22222", "Conductas graves"), ("📄 JUSTIFICANTES", just, GUINDA, "Total registrados")]
@@ -347,7 +362,59 @@ def vista_dashboard_kpis(parent):
     barra_bg = tk.Frame(barra_frame, bg="white", height=22); barra_bg.pack(fill="x", pady=8)
     if total_alumnos>0:
         tk.Frame(barra_bg, bg="#2E7D32", width=int(600 * porc_asist/100)).pack(side="left", fill="y")
+    if USUARIO_ACTUAL.get("rol")=="director" and pendientes>0:
+        tk.Label(parent, text=f"⚠ Tienes {pendientes} cuenta(s) pendiente(s) de aprobar. Ve a '✅ Aprobar Cuentas' en el menú.", bg="#FFE0E0", fg="#8B0000", font=("Segoe UI", 11, "bold"), padx=12, pady=8).pack(fill="x", padx=25, pady=5)
     tk.Label(parent, text="Tip: Usa el menú de la izquierda en '🔔 Motor de Alertas' para ver el detalle de cada campana.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 9)).pack(anchor="w", padx=25)
+
+# ============ APROBAR CUENTAS - SOLO DIRECTOR ============
+def vista_aprobar_cuentas(parent):
+    tk.Label(parent, text="✅ Aprobar Cuentas Nuevas", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
+    tk.Label(parent, text="Aquí el director aprueba o rechaza a los docentes que se registraron desde el Login", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,10))
+    lbl_total = tk.Label(parent, text="", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")); lbl_total.pack(anchor="w", padx=25, pady=5)
+    cols = ("Nombre","Usuario","Rol","Grupo","Estado")
+    tree = ttk.Treeview(parent, columns=cols, show="headings", height=12)
+    for c in cols: tree.heading(c, text=c)
+    tree.column("Nombre", width=220); tree.column("Usuario", width=150); tree.column("Rol", width=110); tree.column("Grupo", width=160); tree.column("Estado", width=120)
+    tree.pack(fill="both", expand=True, padx=25, pady=10)
+    def cargar():
+        for i in tree.get_children(): tree.delete(i)
+        try:
+            con = conectar(); cur = con.cursor(dictionary=True)
+            cur.execute("SELECT * FROM usuarios WHERE estado='pendiente' ORDER BY id DESC")
+            rows = cur.fetchall(); con.close()
+            for r in rows:
+                tree.insert("", "end", values=(r['nombre'], r['usuario'], r['rol'], r.get('grupo_asignado') or "", r['estado']), tags=(r['id'],))
+            lbl_total.config(text=f"Pendientes de aprobar: {len(rows)}")
+            if not rows:
+                tree.insert("", "end", values=("No hay cuentas pendientes. Todo aprobado ✅", "", "", "", ""))
+        except Exception as e: lbl_total.config(text=f"Error: {e}")
+    def cambiar_estado(nuevo_estado):
+        sel = tree.selection()
+        if not sel: messagebox.showwarning("Falta", "Selecciona una cuenta"); return
+        vals = tree.item(sel[0])["values"]
+        if "No hay cuentas" in vals[0]: return
+        tags = tree.item(sel[0])["tags"]
+        if not tags: return
+        uid = tags[0]
+        if nuevo_estado=="aprobado":
+            if not messagebox.askyesno("¿Aprobar?", f"¿Aprobar la cuenta de {vals[0]} ({vals[1]})?\nYa podrá entrar al sistema."): return
+        else:
+            if not messagebox.askyesno("¿Rechazar?", f"¿Rechazar y borrar la cuenta de {vals[0]} ({vals[1]})?"): return
+        try:
+            con = conectar(); cur = con.cursor()
+            if nuevo_estado=="aprobado":
+                cur.execute("UPDATE usuarios SET estado='aprobado' WHERE id=%s", (uid,))
+                messagebox.showinfo("Aprobado", f"Cuenta de {vals[0]} aprobada ✅ Ya puede entrar.")
+            else:
+                cur.execute("DELETE FROM usuarios WHERE id=%s", (uid,))
+                messagebox.showinfo("Rechazado", f"Cuenta de {vals[0]} rechazada y eliminada.")
+            con.commit(); con.close(); cargar()
+        except Exception as e: messagebox.showerror("Error", str(e))
+    btns = tk.Frame(parent, bg=BLANCO); btns.pack(fill="x", padx=25, pady=10)
+    tk.Button(btns, text="✅ APROBAR CUENTA", bg="#2E7D32", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=lambda: cambiar_estado("aprobado")).pack(side="left", fill="x", expand=True, padx=(0,5))
+    tk.Button(btns, text="❌ RECHAZAR CUENTA", bg="#B22222", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=lambda: cambiar_estado("rechazado")).pack(side="left", fill="x", expand=True, padx=5)
+    tk.Button(btns, text="🔄 ACTUALIZAR", bg=DORADO, fg=GUINDA, font=("Segoe UI", 11, "bold"), bd=0, pady=12, command=cargar).pack(side="left", fill="x", expand=True, padx=(5,0))
+    cargar()
 
 GUINDA = "#4E0F27"; DORADO = "#C9A86A"; BEIGE = "#F5E6D3"; BLANCO = "#FDF8F0"; BEIGE_CLARO = "#F5F0E6"; BORDER = "#D9C5A0"
 GRADOS = cargar_datos_db()
@@ -399,9 +466,13 @@ def crear_header_login():
     tk.Frame(ventana, bg=DORADO, height=2).pack(fill="x")
 
 def login():
-    if not entrada_user.get() or not entrada_pass.get():
+    # Si el campo tiene el texto de ayuda, no lo tomes como usuario
+    u_raw = entrada_user.get().strip().lower()
+    if u_raw == "escribe tu usuario...":
+        u_raw = ""
+    if not u_raw or not entrada_pass.get():
         messagebox.showwarning("Aviso", "Escribe usuario y contraseña"); return
-    u = entrada_user.get().strip().lower(); p = entrada_pass.get().strip()
+    u = u_raw; p = entrada_pass.get().strip()
     try:
         con = conectar(); cur = con.cursor(dictionary=True)
         cur.execute("SELECT * FROM usuarios WHERE usuario=%s AND password=%s", (u, p))
@@ -409,6 +480,10 @@ def login():
     except Exception as e:
         messagebox.showerror("Error DB", f"No conecta a XAMPP: {e}"); return
     if user:
+        estado = user.get('estado') or 'aprobado'
+        if estado == 'pendiente':
+            messagebox.showwarning("Pendiente", f"Hola {user.get('nombre')}, tu cuenta está PENDIENTE de aprobación.\n\nPídele al director que te apruebe en 'Aprobar Cuentas' y luego ya puedes entrar.")
+            return
         USUARIO_ACTUAL["nombre"] = user.get('nombre', user['usuario'])
         USUARIO_ACTUAL["usuario"] = user['usuario']
         USUARIO_ACTUAL["rol"] = user['rol']
@@ -417,7 +492,7 @@ def login():
     else:
         messagebox.showerror("Error", "Usuario o contraseña incorrecta")
 
-def pantalla_login():
+def pantalla_crear_cuenta():
     limpiar(); crear_header_login()
     fondo = tk.Frame(ventana, bg=BEIGE); fondo.pack(expand=True, fill="both")
     canvas = tk.Canvas(fondo, bg=BEIGE, highlightthickness=0)
@@ -430,22 +505,126 @@ def pantalla_login():
     canvas.pack(side="left", fill="both", expand=True); scrollbar.pack(side="right", fill="y")
     card = tk.Frame(scroll_frame, bg=BLANCO, highlightbackground=DORADO, highlightthickness=1, padx=35, pady=25)
     card.pack(padx=20, pady=20)
-    tk.Label(card, text="INICIAR SESIÓN", font=("Segoe UI", 14, "bold"), bg=BLANCO, fg="#611232").pack(pady=(0,15))
-    tk.Label(card, text="Usuario:", bg=BLANCO, font=("Segoe UI", 11), anchor="w").pack(fill="x")
+    tk.Label(card, text="CREAR CUENTA NUEVA", font=("Segoe UI", 14, "bold"), bg=BLANCO, fg="#611232").pack(pady=(0,5))
+    tk.Label(card, text="Tu cuenta quedará PENDIENTE hasta que el director la apruebe", font=("Segoe UI", 9), bg=BLANCO, fg="#B22222").pack(pady=(0,15))
+    def campo(texto):
+        tk.Label(card, text=texto, bg=BLANCO, font=("Segoe UI", 11), anchor="w").pack(fill="x")
+        e = tk.Entry(card, font=("Segoe UI", 11), bg="#FFFBF5", bd=0, highlightthickness=1, highlightbackground="#D9C5A0")
+        e.pack(fill="x", ipady=10, pady=5); return e
+    e_nombre = campo("Nombre completo:")
+    e_usuario = campo("Usuario (ej: ana.1a):")
+    e_pass = campo("Contraseña:")
+    e_pass.config(show="•")
+    e_pass2 = campo("Confirmar contraseña:")
+    e_pass2.config(show="•")
+    tk.Label(card, text="Rol:", bg=BLANCO, font=("Segoe UI", 11), anchor="w").pack(fill="x")
+    rol_var = tk.StringVar(value="docente")
+    ttk.Combobox(card, textvariable=rol_var, values=["docente","director"], state="readonly", font=("Segoe UI", 11)).pack(fill="x", ipady=4, pady=5)
+    tk.Label(card, text="Grupo asignado (si eres docente):", bg=BLANCO, font=("Segoe UI", 11), anchor="w").pack(fill="x")
+    grupo_var = tk.StringVar(value="1° Primaria")
+    ttk.Combobox(card, textvariable=grupo_var, values=["1° Primaria","2° Primaria","3° Primaria","4° Primaria","5° Primaria","6° Primaria"], state="readonly", font=("Segoe UI", 11)).pack(fill="x", ipady=4, pady=5)
+    tk.Label(card, text="Código de Director (solo si elegiste Director):", bg=BLANCO, font=("Segoe UI", 11), anchor="w").pack(fill="x")
+    e_codigo = tk.Entry(card, font=("Segoe UI", 11), show="•", bg="#FFFBF5", bd=0, highlightthickness=1, highlightbackground="#D9C5A0")
+    e_codigo.pack(fill="x", ipady=10, pady=5)
+    tk.Label(card, text="Código para Director: DIR2026 (pídelo al director)", font=("Segoe UI", 8), bg=BLANCO, fg="#8A7A70").pack(pady=2)
+    def registrar():
+        nombre = e_nombre.get().strip(); usuario = e_usuario.get().strip().lower(); pw = e_pass.get().strip(); pw2 = e_pass2.get().strip()
+        rol = rol_var.get(); grupo = grupo_var.get() if rol=="docente" else ""
+        codigo = e_codigo.get().strip()
+        if not nombre or not usuario or not pw:
+            messagebox.showwarning("Falta dato", "Llena nombre, usuario y contraseña"); return
+        if len(pw) < 4:
+            messagebox.showwarning("Contraseña corta", "La contraseña debe tener mínimo 4 caracteres"); return
+        if pw != pw2:
+            messagebox.showwarning("No coincide", "Las contraseñas no coinciden"); return
+        if rol=="director" and codigo != CODIGO_DIRECTOR:
+            messagebox.showerror("Código incorrecto", "Para crear cuenta de Director necesitas el código secreto.\nPídelo al director."); return
+        try:
+            con = conectar(); cur = con.cursor()
+            cur.execute("SELECT id FROM usuarios WHERE usuario=%s", (usuario,))
+            if cur.fetchone():
+                messagebox.showerror("Ya existe", f"El usuario '{usuario}' ya existe. Elige otro."); con.close(); return
+            cur.execute("INSERT INTO usuarios (nombre, usuario, password, rol, grupo_asignado, estado) VALUES (%s,%s,%s,%s,%s,'pendiente')", (nombre, usuario, pw, rol, grupo))
+            con.commit(); con.close()
+            messagebox.showinfo("¡Registrado!", f"Cuenta de {nombre} creada como PENDIENTE ✅\n\nAhora pídele al director que te apruebe en 'Aprobar Cuentas'.\nCuando te apruebe ya podrás entrar con:\nUsuario: {usuario}")
+            pantalla_login()
+        except Exception as e: messagebox.showerror("Error DB", str(e))
+    tk.Button(card, text="CREAR MI CUENTA", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, cursor="hand2", command=registrar).pack(fill="x", pady=12)
+    tk.Button(card, text="← Ya tengo cuenta, volver al Login", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10, "bold"), bd=0, pady=10, cursor="hand2", command=pantalla_login).pack(fill="x")
+    canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+# ============ LOGIN MEJORADO - MISMOS CARACTERES ORIGINALES ============
+def pantalla_login():
+    limpiar(); crear_header_login()
+    main = tk.Frame(ventana, bg=BEIGE); main.pack(expand=True, fill="both")
+    # LADO IZQUIERDO - GUINDA
+    izq = tk.Frame(main, bg="#611232", width=450); izq.pack(side="left", fill="y"); izq.pack_propagate(False)
+    tk.Label(izq, text="🏫", bg="#611232", fg="white", font=("Segoe UI", 70)).pack(pady=(60,5))
+    tk.Label(izq, text="PRIMARIA", bg="#611232", fg="white", font=("Segoe UI", 28, "bold")).pack()
+    tk.Label(izq, text="NEZAHUALCÓYOTL", bg="#611232", fg=DORADO, font=("Segoe UI", 28, "bold")).pack()
+    tk.Frame(izq, bg=DORADO, height=4, width=80).pack(pady=15)
+    tk.Label(izq, text="Alerta Temprana", bg="#611232", fg="white", font=("Segoe UI", 16)).pack()
+    tk.Label(izq, text="Detecta a tiempo.\nActúa a tiempo.", bg="#611232", fg="#EADDC8", font=("Segoe UI", 11), justify="center").pack(pady=15)
+    for emoji, titulo, sub in [("✅","Asistencia","Control diario"),("⚠","Alertas","Conductas y faltas"),("📖","Diccionario","Bilingüe en PDF")]:
+        f = tk.Frame(izq, bg="#7A1A3A", padx=15, pady=10); f.pack(fill="x", padx=30, pady=5)
+        tk.Label(f, text=f"{emoji}  {titulo}", bg="#7A1A3A", fg="white", font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x")
+        tk.Label(f, text=sub, bg="#7A1A3A", fg="#EADDC8", font=("Segoe UI", 9), anchor="w").pack(fill="x")
+    tk.Label(izq, text="Ciclo 2025 - 2026", bg="#611232", fg=DORADO, font=("Segoe UI", 9, "bold")).pack(side="bottom", pady=20)
+    # LADO DERECHO - LOGIN
+    der = tk.Frame(main, bg=BEIGE); der.pack(side="right", fill="both", expand=True)
+    canvas = tk.Canvas(der, bg=BEIGE, highlightthickness=0)
+    scrollbar = tk.Scrollbar(der, orient="vertical", command=canvas.yview)
+    scroll_frame = tk.Frame(canvas, bg=BEIGE)
+    scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    win_id = canvas.create_window((0,0), window=scroll_frame, anchor="n")
+    canvas.bind("<Configure>", lambda e: canvas.itemconfig(win_id, width=e.width))
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True); scrollbar.pack(side="right", fill="y")
+    sombra = tk.Frame(scroll_frame, bg="#E5DCCB", padx=2, pady=2); sombra.pack(padx=20, pady=20)
+    card = tk.Frame(sombra, bg=BLANCO, highlightbackground=DORADO, highlightthickness=2, padx=35, pady=25)
+    card.pack(fill="both", expand=True)
+    tk.Label(card, text="👋 ¡Bienvenido!", bg=BLANCO, fg="#611232", font=("Segoe UI", 18, "bold")).pack()
+    tk.Label(card, text="INICIAR SESIÓN", font=("Segoe UI", 11, "bold"), bg=BLANCO, fg="#8A7A70").pack(pady=(0,15))
+    tk.Label(card, text="👤  Usuario:", bg=BLANCO, font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x")
     global entrada_user, entrada_pass
-    entrada_user = tk.Entry(card, font=("Segoe UI", 11), bg="#FFFBF5", bd=0, highlightthickness=1, highlightbackground="#D9C5A0", width=38)
-    entrada_user.pack(fill="x", ipady=10, pady=5)
-    tk.Label(card, text="Contraseña:", bg=BLANCO, font=("Segoe UI", 11), anchor="w").pack(fill="x")
-    entrada_pass = tk.Entry(card, font=("Segoe UI", 11), show="•", bg="#FFFBF5", bd=0, highlightthickness=1, highlightbackground="#D9C5A0")
-    entrada_pass.pack(fill="x", ipady=10, pady=5)
+    entrada_user = tk.Entry(card, font=("Segoe UI", 12), bg="#FFFBF5", bd=0, highlightthickness=2, highlightbackground="#D9C5A0", highlightcolor="#611232", width=38)
+    entrada_user.pack(fill="x", ipady=11, pady=5)
+    entrada_user.insert(0, "Escribe tu usuario...")
+    entrada_user.config(fg="#AAAAAA")
+    def limpiar_usuario(e):
+        if entrada_user.get() == "Escribe tu usuario...":
+            entrada_user.delete(0, "end"); entrada_user.config(fg=GUINDA)
+    entrada_user.bind("<FocusIn>", limpiar_usuario)
+    tk.Label(card, text="🔒  Contraseña:", bg=BLANCO, font=("Segoe UI", 11, "bold"), anchor="w").pack(fill="x")
+    fila_pass = tk.Frame(card, bg=BLANCO); fila_pass.pack(fill="x", pady=5)
+    entrada_pass = tk.Entry(fila_pass, font=("Segoe UI", 12), show="•", bg="#FFFBF5", bd=0, highlightthickness=2, highlightbackground="#D9C5A0", highlightcolor="#611232")
+    entrada_pass.pack(side="left", fill="x", expand=True, ipady=11)
+    ver_var = tk.BooleanVar(value=False)
+    def ver_pass():
+        ver_var.set(not ver_var.get())
+        entrada_pass.config(show="" if ver_var.get() else "•")
+        btn_ojo.config(text="🙈" if ver_var.get() else "👁️")
+    btn_ojo = tk.Button(fila_pass, text="👁️", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 12), bd=0, padx=10, cursor="hand2", command=ver_pass)
+    btn_ojo.pack(side="right", padx=(5,0), ipady=5)
     tk.Label(card, text="director / DIR123", font=("Segoe UI", 8), bg=BLANCO, fg=GUINDA).pack(pady=5)
-    tk.Button(card, text="ENTRAR", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, cursor="hand2", command=login).pack(fill="x", pady=12)
-    tk.Label(card, text="Acceso rápido - toca tu nombre:", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 8)).pack(pady=(2,6))
+    def entrar_hover(e): btn_entrar.config(bg="#8B1A4A")
+    def salir_hover(e): btn_entrar.config(bg="#611232")
+    btn_entrar = tk.Button(card, text="ENTRAR  →", bg="#611232", fg="white", font=("Segoe UI", 13, "bold"), bd=0, pady=13, cursor="hand2", command=login)
+    btn_entrar.pack(fill="x", pady=12)
+    btn_entrar.bind("<Enter>", entrar_hover); btn_entrar.bind("<Leave>", salir_hover)
+    tk.Button(card, text="¿No tienes cuenta? Crear cuenta", bg=BLANCO, fg="#611232", font=("Segoe UI", 10, "bold", "underline"), bd=0, cursor="hand2", command=pantalla_crear_cuenta).pack(fill="x", pady=5)
+    tk.Frame(card, bg="#EADDC8", height=1).pack(fill="x", pady=10)
+    tk.Label(card, text="Acceso rápido - toca tu nombre:", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 8, "bold")).pack(pady=(2,6))
     def llenar(u,p):
-        entrada_user.delete(0,"end"); entrada_user.insert(0,u)
+        entrada_user.delete(0,"end"); entrada_user.config(fg=GUINDA); entrada_user.insert(0,u)
         entrada_pass.delete(0,"end"); entrada_pass.insert(0,p)
-    for texto, u, p in DOCENTES_RAPIDOS:
-        tk.Button(card, text=f"{texto}\n{u}  |  {p}", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 9), bd=0, anchor="w", justify="left", cursor="hand2", command=lambda u=u,p=p: llenar(u,p)).pack(fill="x", pady=2, ipady=3)
+    grid = tk.Frame(card, bg=BLANCO); grid.pack(fill="x")
+    for idx, (texto, u, p) in enumerate(DOCENTES_RAPIDOS):
+        f = tk.Frame(grid, bg=BLANCO); f.grid(row=idx//2, column=idx%2, sticky="ew", padx=3, pady=3)
+        grid.columnconfigure(0, weight=1); grid.columnconfigure(1, weight=1)
+        nombre_corto = texto.split("•")[0].strip() if "•" in texto else texto
+        tk.Button(f, text=f"{nombre_corto}\n{u}", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 9, "bold"), bd=0, anchor="w", justify="left", cursor="hand2", command=lambda u=u,p=p: llenar(u,p)).pack(fill="x", ipady=5)
+    tk.Label(card, text="Primaria Nezahualcóyotl  •  Alerta Temprana", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 8)).pack(pady=(12,0))
     entrada_pass.bind("<Return>", lambda e: login())
     canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
@@ -682,7 +861,6 @@ def vista_docente():
     btn_menu("🔔 Motor de Alertas", "Alertas")
     btn_menu("📊 Dashboard KPIs", "Dashboard")
     tk.Button(menu, text="  Cerrar Sesión", bg=GUINDA, fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
-    # Campana superior derecha - Docente
     try:
         alertas_top = obtener_alertas_activas()
         rojas_top = sum(1 for a in alertas_top if a['nivel']=='Alto')
@@ -827,7 +1005,6 @@ def vista_directivo():
         tk.Button(filtros, text="🔍 BUSCAR", bg=GUINDA, fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=14, pady=4, command=cargar).pack(side="left", padx=8)
         tk.Button(filtros, text="🔄 ACTUALIZAR", bg=DORADO, fg=GUINDA, font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=4, command=cargar).pack(side="left", padx=4)
         cargar()
-        # ===== IMPRIMIR REPORTE QUE MANDÓ EL DOCENTE =====
         def imprimir_reporte_seleccionado():
             sel = tree.selection()
             if not sel:
@@ -981,6 +1158,7 @@ def vista_directivo():
         elif op == "Diccionario": vista_diccionario(contenido)
         elif op == "Alertas": vista_motor_alertas(contenido)
         elif op == "Dashboard": vista_dashboard_kpis(contenido)
+        elif op == "Aprobar": vista_aprobar_cuentas(contenido)
         else: tk.Label(contenido, text=f"{op}\n\nMódulo en desarrollo", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 16, "bold")).pack(pady=50)
     def btn_menu(texto, op, color=BLANCO):
         b = tk.Button(menu, text=f"  {texto}", bg="#611232", fg=color, font=("Segoe UI", 11, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", activebackground="#8B1A4A", activeforeground=DORADO)
@@ -996,8 +1174,8 @@ def vista_directivo():
     btn_menu("Configuración", "Config")
     btn_menu("🔔 Motor de Alertas", "Alertas")
     btn_menu("📊 Dashboard KPIs", "Dashboard")
+    btn_menu("✅ Aprobar Cuentas", "Aprobar")
     tk.Button(menu, text="  Cerrar Sesión", bg="#611232", fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
-    # Campana superior derecha - Director
     try:
         alertas_top = obtener_alertas_activas()
         rojas_top = sum(1 for a in alertas_top if a['nivel']=='Alto')
@@ -1010,7 +1188,6 @@ ventana.state('zoomed')
 ventana.configure(bg=BEIGE)
 pantalla_login()
 ventana.mainloop()
-
 
 
 # CREATE DATABASE IF NOT EXISTS alerta_temprana;
