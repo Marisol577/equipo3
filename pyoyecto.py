@@ -2,6 +2,9 @@ import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 from datetime import datetime
 import mysql.connector
+import os
+import shutil
+import webbrowser
 
 try:
     import openpyxl
@@ -40,33 +43,20 @@ def cargar_nombres_alumnos():
         return nombres
 
 # ============ PUNTO 1: CARGA MASIVA EXCEL - ALUMNOS + DOCENTES EN EL MISMO EXCEL ============
-# Excel con 2 pestañas:
-# Pestaña "Alumnos": Grado | Numero_Lista | Nombre_Completo
-# Pestaña "Docentes": Nombre | Usuario | Password | Rol | Grupo_Asignado
 def cargar_masiva_excel(ruta_excel, lbl_status=None):
     if openpyxl is None:
         messagebox.showerror("Falta librería", "Instala openpyxl: pip install openpyxl")
         return False
     try:
         wb = openpyxl.load_workbook(ruta_excel, data_only=True)
-
-        # Si solo trae una hoja, se toma como Alumnos para que siga jalando como antes
         tiene_alumnos = "Alumnos" in wb.sheetnames
         tiene_docentes = "Docentes" in wb.sheetnames
         if not tiene_alumnos and not tiene_docentes:
-            ws_unica = wb.active
-            # La tratamos como Alumnos
-            tiene_alumnos = True
-            ws_alumnos = ws_unica
-            ws_docentes = None
+            ws_alumnos = wb.active; ws_docentes = None; tiene_alumnos = True
         else:
             ws_alumnos = wb["Alumnos"] if tiene_alumnos else None
             ws_docentes = wb["Docentes"] if tiene_docentes else None
-
-        datos_excel = []
-        datos_docentes = []
-
-        # --- LEER ALUMNOS ---
+        datos_excel = []; datos_docentes = []
         if ws_alumnos is not None:
             filas = list(ws_alumnos.iter_rows(values_only=True))
             if filas:
@@ -83,12 +73,9 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
                     if fila[idx_nombre] is None or str(fila[idx_nombre]).strip()=="": continue
                     grado = str(fila[idx_grado]).strip() if fila[idx_grado] else ""
                     nombre = str(fila[idx_nombre]).strip()
-                    try:
-                        num = int(fila[idx_num]) if idx_num is not None and idx_num != -1 and fila[idx_num] is not None else 0
+                    try: num = int(fila[idx_num]) if idx_num is not None and idx_num != -1 and fila[idx_num] is not None else 0
                     except: num = 0
                     datos_excel.append((grado, num, nombre))
-
-        # --- LEER DOCENTES ---
         if ws_docentes is not None:
             filas2 = list(ws_docentes.iter_rows(values_only=True))
             if filas2:
@@ -112,18 +99,12 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
                     rol_d = str(fila[idx_rol]).strip().lower() if idx_rol!=-1 and fila[idx_rol] is not None else "docente"
                     grupo_d = str(fila[idx_grupo]).strip() if idx_grupo!=-1 and fila[idx_grupo] is not None else ""
                     datos_docentes.append((nombre_d, usuario_d, password_d, rol_d, grupo_d))
-
         if not datos_excel and not datos_docentes:
             messagebox.showwarning("Sin datos", "No encontré alumnos ni docentes en el Excel"); return False
-
-        # Confirmar borrado solo si vienen alumnos
         if datos_excel:
             if not messagebox.askyesno("¿Borrar todo?", f"Se van a BORRAR todos los alumnos actuales y se van a cargar {len(datos_excel)} alumnos nuevos del Excel.\nY se van a cargar/actualizar {len(datos_docentes)} docentes del mismo Excel.\n¿Estás seguro?"):
                 return False
-
         con = conectar(); cur = con.cursor()
-
-        # --- GUARDAR ALUMNOS (igual que antes) ---
         if datos_excel:
             cur.execute("DELETE FROM asistencia")
             cur.execute("DELETE FROM alumnos")
@@ -145,17 +126,12 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
                         num = 1000 + contadores[grado]
                 cur.execute("INSERT INTO alumnos (grado_id, numero_lista, nombre_completo) VALUES (%s,%s,%s)", (gid, num, nombre))
             cur.execute("UPDATE grados g SET total_alumnos = (SELECT COUNT(*) FROM alumnos a WHERE a.grado_id=g.id)")
-
-        # --- GUARDAR DOCENTES (NUEVO, mismo Excel) ---
         for nombre_d, usuario_d, password_d, rol_d, grupo_d in datos_docentes:
             cur.execute("SELECT id FROM usuarios WHERE usuario=%s", (usuario_d,))
             if cur.fetchone():
-                cur.execute("UPDATE usuarios SET nombre=%s, password=%s, rol=%s, grupo_asignado=%s WHERE usuario=%s",
-                            (nombre_d, password_d, rol_d, grupo_d, usuario_d))
+                cur.execute("UPDATE usuarios SET nombre=%s, password=%s, rol=%s, grupo_asignado=%s WHERE usuario=%s", (nombre_d, password_d, rol_d, grupo_d, usuario_d))
             else:
-                cur.execute("INSERT INTO usuarios (nombre, usuario, password, rol, grupo_asignado) VALUES (%s,%s,%s,%s,%s)",
-                            (nombre_d, usuario_d, password_d, rol_d, grupo_d))
-
+                cur.execute("INSERT INTO usuarios (nombre, usuario, password, rol, grupo_asignado) VALUES (%s,%s,%s,%s,%s)", (nombre_d, usuario_d, password_d, rol_d, grupo_d))
         con.commit(); con.close()
         cargar_datos_db()
         messagebox.showinfo("Listo", f"Carga masiva exitosa: {len(datos_excel)} alumnos + {len(datos_docentes)} docentes cargados del mismo Excel.")
@@ -164,7 +140,7 @@ def cargar_masiva_excel(ruta_excel, lbl_status=None):
     except Exception as e:
         messagebox.showerror("Error Excel", str(e)); return False
 
-# ============ NUEVO: AGREGAR UN ALUMNO ============
+# ============ AGREGAR UN ALUMNO ============
 def agregar_un_alumno(nombre, grado, numero_lista):
     nombre = nombre.strip(); grado = grado.strip()
     if not nombre or not grado:
@@ -194,6 +170,95 @@ def agregar_un_alumno(nombre, grado, numero_lista):
         return True
     except Exception as e:
         messagebox.showerror("Error DB", str(e)); return False
+
+# ============ DICCIONARIO BILINGÜE - SE SUBE COMO PDF ============
+CARPETA_DICCIONARIO = "diccionarios"
+def asegurar_carpeta_diccionario():
+    if not os.path.exists(CARPETA_DICCIONARIO):
+        os.makedirs(CARPETA_DICCIONARIO)
+def listar_pdfs_diccionario():
+    asegurar_carpeta_diccionario()
+    archivos = []
+    for f in os.listdir(CARPETA_DICCIONARIO):
+        if f.lower().endswith(".pdf"):
+            ruta = os.path.join(CARPETA_DICCIONARIO, f)
+            tam = os.path.getsize(ruta) // 1024
+            archivos.append((f, ruta, f"{tam} KB"))
+    return archivos
+def vista_diccionario(parent):
+    asegurar_carpeta_diccionario()
+    tk.Label(parent, text="📖 Diccionario Bilingüe", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
+    tk.Label(parent, text="Español - Inglés  •  El diccionario se sube como PDF", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,10))
+    if USUARIO_ACTUAL.get("rol") == "director":
+        card = tk.Frame(parent, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=20, pady=15)
+        card.pack(fill="x", padx=25, pady=10)
+        tk.Label(card, text="Subir Diccionario en PDF:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        tk.Label(card, text="Elige el PDF de tu computadora y se guardará en el programa para que los docentes lo abran.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 10)).pack(anchor="w", pady=5)
+        lbl_archivo = tk.Label(card, text="Ningún archivo seleccionado", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 10)); lbl_archivo.pack(anchor="w", pady=5)
+        ruta_var = {"ruta": ""}
+        def elegir():
+            ruta = filedialog.askopenfilename(title="Selecciona el Diccionario en PDF", filetypes=[("PDF", "*.pdf"), ("Todos", "*.*")])
+            if ruta:
+                ruta_var["ruta"] = ruta
+                lbl_archivo.config(text=f"Archivo: {os.path.basename(ruta)}")
+        def subir():
+            if not ruta_var["ruta"]:
+                messagebox.showwarning("Falta archivo", "Primero elige un PDF"); return
+            try:
+                nombre = os.path.basename(ruta_var["ruta"])
+                destino = os.path.join(CARPETA_DICCIONARIO, nombre)
+                shutil.copy2(ruta_var["ruta"], destino)
+                messagebox.showinfo("Listo", f"Diccionario '{nombre}' subido correctamente.\nYa lo pueden ver los docentes.")
+                ruta_var["ruta"] = ""
+                lbl_archivo.config(text="Ningún archivo seleccionado")
+                cargar_lista()
+            except Exception as e:
+                messagebox.showerror("Error", str(e))
+        f_btn = tk.Frame(card, bg=BLANCO); f_btn.pack(fill="x", pady=5)
+        tk.Button(f_btn, text="📂 ELEGIR PDF", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 11, "bold"), bd=0, pady=10, command=elegir).pack(side="left", fill="x", expand=True, padx=(0,5))
+        tk.Button(f_btn, text="⬆️ SUBIR DICCIONARIO", bg="#611232", fg="white", font=("Segoe UI", 11, "bold"), bd=0, pady=10, command=subir).pack(side="left", fill="x", expand=True, padx=(5,0))
+    tk.Label(parent, text="Diccionarios disponibles:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 13, "bold")).pack(anchor="w", padx=25, pady=(10,5))
+    tree = ttk.Treeview(parent, columns=("Nombre", "Tamaño"), show="headings", height=8)
+    tree.heading("Nombre", text="Nombre del PDF"); tree.heading("Tamaño", text="Tamaño")
+    tree.column("Nombre", width=500); tree.column("Tamaño", width=120)
+    tree.pack(fill="both", expand=True, padx=25, pady=5)
+    def cargar_lista():
+        for i in tree.get_children(): tree.delete(i)
+        pdfs = listar_pdfs_diccionario()
+        if not pdfs:
+            tree.insert("", "end", values=("Aún no hay ningún diccionario subido. El director debe subir el PDF.", ""))
+        else:
+            for nombre, ruta, tam in pdfs:
+                tree.insert("", "end", values=(nombre, tam), tags=(ruta,))
+        return pdfs
+    def abrir_pdf():
+        sel = tree.selection()
+        if not sel: messagebox.showwarning("Falta", "Selecciona un diccionario"); return
+        vals = tree.item(sel[0])["values"]
+        if "Aún no hay" in vals[0]: return
+        tags = tree.item(sel[0])["tags"]
+        if not tags: return
+        ruta = os.path.abspath(tags[0])
+        try: webbrowser.open(ruta)
+        except Exception as e: messagebox.showerror("Error", f"No se pudo abrir el PDF: {e}")
+    def borrar_pdf():
+        if USUARIO_ACTUAL.get("rol") != "director": return
+        sel = tree.selection()
+        if not sel: messagebox.showwarning("Falta", "Selecciona un diccionario para borrar"); return
+        vals = tree.item(sel[0])["values"]
+        if "Aún no hay" in vals[0]: return
+        tags = tree.item(sel[0])["tags"]
+        if not tags: return
+        if messagebox.askyesno("¿Borrar?", f"¿Borrar el diccionario '{vals[0]}'?"):
+            try:
+                os.remove(tags[0]); messagebox.showinfo("Listo", "Diccionario borrado"); cargar_lista()
+            except Exception as e: messagebox.showerror("Error", str(e))
+    btns = tk.Frame(parent, bg=BLANCO); btns.pack(fill="x", padx=25, pady=10)
+    tk.Button(btns, text="📖 ABRIR PDF", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=abrir_pdf).pack(side="left", fill="x", expand=True, padx=(0,5))
+    tk.Button(btns, text="🔄 ACTUALIZAR LISTA", bg=DORADO, fg=GUINDA, font=("Segoe UI", 11, "bold"), bd=0, pady=12, command=cargar_lista).pack(side="left", fill="x", expand=True, padx=5)
+    if USUARIO_ACTUAL.get("rol") == "director":
+        tk.Button(btns, text="🗑️ BORRAR PDF", bg="#8B0000", fg="white", font=("Segoe UI", 11, "bold"), bd=0, pady=12, command=borrar_pdf).pack(side="left", fill="x", expand=True, padx=(5,0))
+    cargar_lista()
 
 GUINDA = "#4E0F27"; DORADO = "#C9A86A"; BEIGE = "#F5E6D3"; BLANCO = "#FDF8F0"; BEIGE_CLARO = "#F5F0E6"; BORDER = "#D9C5A0"
 GRADOS = cargar_datos_db()
@@ -362,8 +427,7 @@ def vista_docente():
             try:
                 fecha_db = datetime.strptime(fecha_var.get().strip(), "%d/%m/%Y").date()
                 con = conectar(); cur = con.cursor()
-                cur.execute("INSERT INTO justificantes (alumno_nombre, grado_grupo, docente, fecha_falta, num_dias, motivo, descripcion, tutor, telefono) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (alumno_var.get(), grado_var.get(), docente_var.get(), fecha_db, int(faltas_var.get()), motivo_var.get(), descripcion.get("1.0","end").strip(), tutor_var.get(), telefono_var.get()))
+                cur.execute("INSERT INTO justificantes (alumno_nombre, grado_grupo, docente, fecha_falta, num_dias, motivo, descripcion, tutor, telefono) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)", (alumno_var.get(), grado_var.get(), docente_var.get(), fecha_db, int(faltas_var.get()), motivo_var.get(), descripcion.get("1.0","end").strip(), tutor_var.get(), telefono_var.get()))
                 con.commit(); con.close()
                 messagebox.showinfo("Guardado", "Justificante guardado en la base de datos")
             except Exception as e: messagebox.showerror("Error DB", str(e))
@@ -421,8 +485,7 @@ def vista_docente():
             try:
                 fecha_db = datetime.strptime(fecha_var.get().strip(), "%d/%m/%Y").date()
                 con = conectar(); cur = con.cursor()
-                cur.execute("INSERT INTO reportes_alerta (alumno_nombre, grado_grupo, docente, fecha, tipo, nivel_riesgo, descripcion, accion_propuesta, generar_apercibimiento, generar_plan) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                    (alumno_var.get(), grado_var.get(), docente_var.get(), fecha_db, tipo_var.get(), riesgo_var.get(), descripcion.get("1.0","end").strip(), accion.get("1.0","end").strip(), int(apercibimiento_var.get()), int(apoyo_var.get())))
+                cur.execute("INSERT INTO reportes_alerta (alumno_nombre, grado_grupo, docente, fecha, tipo, nivel_riesgo, descripcion, accion_propuesta, generar_apercibimiento, generar_plan) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (alumno_var.get(), grado_var.get(), docente_var.get(), fecha_db, tipo_var.get(), riesgo_var.get(), descripcion.get("1.0","end").strip(), accion.get("1.0","end").strip(), int(apercibimiento_var.get()), int(apoyo_var.get())))
                 con.commit(); con.close()
                 messagebox.showinfo("Guardado", "Reporte guardado en la base de datos")
             except Exception as e: messagebox.showerror("Error DB", str(e))
@@ -500,6 +563,7 @@ def vista_docente():
         if op == "Asistencia": crear_vista_asistencia(contenido)
         elif op == "Justificantes": crear_vista_justificante(contenido)
         elif op == "Reportes": crear_vista_reportes(contenido)
+        elif op == "Diccionario": vista_diccionario(contenido)
         elif op == "Mi Grupo":
             header = tk.Frame(contenido, bg=BLANCO); header.pack(fill="x", padx=30, pady=(25,10))
             tk.Label(header, text=f"Mi Grupo - {USUARIO_ACTUAL['grupo']}", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 22, "bold")).pack(anchor="w")
@@ -522,6 +586,7 @@ def vista_docente():
     btn_menu("Asistencia", "Asistencia")
     btn_menu("Justificantes", "Justificantes")
     btn_menu("Reportes Alertas", "Reportes")
+    btn_menu("📖 Diccionario Bilingüe", "Diccionario")
     btn_menu("Calificaciones", "Calificaciones")
     tk.Button(menu, text="  Cerrar Sesión", bg=GUINDA, fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
     mostrar_opcion("Mi Grupo", botones_docente[0])
@@ -612,25 +677,19 @@ def vista_directivo():
         tk.Label(parent, text="Aquí el director ve todos los reportes y justificantes que suben los 6 docentes", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,10))
         filtros = tk.Frame(parent, bg=BLANCO); filtros.pack(fill="x", padx=25, pady=5)
         tk.Label(filtros, text="Ver:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 10, "bold")).pack(side="left")
-        tipo_var = tk.StringVar(value="Todos")
-        grupo_var = tk.StringVar(value="Todos los grupos")
-        buscar_var = tk.StringVar()
+        tipo_var = tk.StringVar(value="Todos"); grupo_var = tk.StringVar(value="Todos los grupos"); buscar_var = tk.StringVar()
         ttk.Combobox(filtros, textvariable=tipo_var, values=["Todos","Reportes de Alerta","Justificantes"], state="readonly", width=20).pack(side="left", padx=8)
         ttk.Combobox(filtros, textvariable=grupo_var, values=["Todos los grupos"]+list(GRADOS.keys()), state="readonly", width=18).pack(side="left", padx=8)
         tk.Entry(filtros, textvariable=buscar_var, font=("Segoe UI", 10), width=28).pack(side="left", padx=8)
         tk.Label(filtros, text="Buscar alumno...", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 8)).pack(side="left")
         lbl_total = tk.Label(parent, text="", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")); lbl_total.pack(anchor="w", padx=25, pady=5)
         kpi = tk.Frame(parent, bg=BLANCO); kpi.pack(fill="x", padx=25, pady=5)
-        lbl_alertas = tk.Label(kpi, text="⚠ Alertas: 0", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10, "bold"), padx=12, pady=6)
-        lbl_alertas.pack(side="left", padx=(0,8))
-        lbl_just = tk.Label(kpi, text="📄 Justificantes: 0", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10, "bold"), padx=12, pady=6)
-        lbl_just.pack(side="left", padx=8)
-        lbl_alto = tk.Label(kpi, text="🔴 Riesgo Alto: 0", bg="#FFE0E0", fg="#8B0000", font=("Segoe UI", 10, "bold"), padx=12, pady=6)
-        lbl_alto.pack(side="left", padx=8)
+        lbl_alertas = tk.Label(kpi, text="⚠ Alertas: 0", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10, "bold"), padx=12, pady=6); lbl_alertas.pack(side="left", padx=(0,8))
+        lbl_just = tk.Label(kpi, text="📄 Justificantes: 0", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10, "bold"), padx=12, pady=6); lbl_just.pack(side="left", padx=8)
+        lbl_alto = tk.Label(kpi, text="🔴 Riesgo Alto: 0", bg="#FFE0E0", fg="#8B0000", font=("Segoe UI", 10, "bold"), padx=12, pady=6); lbl_alto.pack(side="left", padx=8)
         cols = ("Fecha","Tipo","Alumno","Grupo","Docente","Detalle")
         tree = ttk.Treeview(parent, columns=cols, show="headings", height=14)
-        for c in cols:
-            tree.heading(c, text=c); tree.column(c, width=140 if c not in ("Alumno","Detalle") else 200)
+        for c in cols: tree.heading(c, text=c); tree.column(c, width=140 if c not in ("Alumno","Detalle") else 200)
         tree.column("Fecha", width=110); tree.column("Tipo", width=130)
         tree.pack(fill="both", expand=True, padx=25, pady=10)
         scroll = tk.Scrollbar(parent, orient="vertical", command=tree.yview); tree.configure(yscrollcommand=scroll.set)
@@ -653,12 +712,10 @@ def vista_directivo():
                 rows = []
                 if tipo_var.get() in ("Todos","Reportes de Alerta"):
                     cur.execute("SELECT * FROM reportes_alerta ORDER BY fecha DESC")
-                    for r in cur.fetchall():
-                        rows.append((str(r['fecha']), "⚠ Alerta - "+r['tipo'], r['alumno_nombre'], r['grado_grupo'], r['docente'], f"{r['nivel_riesgo']} | {r['descripcion']} | Acción: {r['accion_propuesta']}"))
+                    for r in cur.fetchall(): rows.append((str(r['fecha']), "⚠ Alerta - "+r['tipo'], r['alumno_nombre'], r['grado_grupo'], r['docente'], f"{r['nivel_riesgo']} | {r['descripcion']} | Acción: {r['accion_propuesta']}"))
                 if tipo_var.get() in ("Todos","Justificantes"):
                     cur.execute("SELECT * FROM justificantes ORDER BY fecha_falta DESC")
-                    for r in cur.fetchall():
-                        rows.append((str(r['fecha_falta']), "📄 Justificante - "+r['motivo'], r['alumno_nombre'], r['grado_grupo'], r['docente'], f"{r['num_dias']} día(s) | Tutor: {r['tutor']} | {r['descripcion']}"))
+                    for r in cur.fetchall(): rows.append((str(r['fecha_falta']), "📄 Justificante - "+r['motivo'], r['alumno_nombre'], r['grado_grupo'], r['docente'], f"{r['num_dias']} día(s) | Tutor: {r['tutor']} | {r['descripcion']}"))
                 con.close()
                 filtrados = []
                 for row in rows:
@@ -667,8 +724,7 @@ def vista_directivo():
                     filtrados.append(row)
                 for row in filtrados: tree.insert("", "end", values=row)
                 lbl_total.config(text=f"Mostrando {len(filtrados)} reportes")
-            except Exception as e:
-                lbl_total.config(text=f"Error: {e}")
+            except Exception as e: lbl_total.config(text=f"Error: {e}")
         tk.Button(filtros, text="🔍 BUSCAR", bg=GUINDA, fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=14, pady=4, command=cargar).pack(side="left", padx=8)
         tk.Button(filtros, text="🔄 ACTUALIZAR", bg=DORADO, fg=GUINDA, font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=4, command=cargar).pack(side="left", padx=4)
         cargar()
@@ -720,12 +776,10 @@ def vista_directivo():
         lbl_status.pack(fill="x", padx=20, pady=10); lista.pack(fill="both", expand=True, padx=20, pady=5); actualizar()
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-    # ===== VISTA AGREGAR ALUMNO (DIRECTOR) =====
     def vista_agregar_alumno(parent):
         tk.Label(parent, text="➕ Agregar Alumno", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
         tk.Label(parent, text="El alumno que agregues aquí le aparecerá al docente en su lista de asistencia.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,15))
-        card = tk.Frame(parent, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=20, pady=20)
-        card.pack(fill="x", padx=25, pady=10)
+        card = tk.Frame(parent, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=20, pady=20); card.pack(fill="x", padx=25, pady=10)
         tk.Label(card, text="Nombre completo del alumno:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w")
         entry_nombre = tk.Entry(card, font=("Segoe UI", 12)); entry_nombre.pack(fill="x", ipady=8, pady=6)
         tk.Label(card, text="Grado:", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(8,0))
@@ -741,13 +795,11 @@ def vista_directivo():
         tk.Button(card, text="AGREGAR ALUMNO", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=guardar).pack(fill="x", pady=12)
         tk.Label(card, text="Tip: si no escribes número de lista, se le asigna el siguiente disponible.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 9)).pack(anchor="w")
 
-    # ===== VISTA CARGA MASIVA (DIRECTOR) - AHORA ALUMNOS + DOCENTES MISMO EXCEL =====
     def vista_carga_masiva(parent):
         tk.Label(parent, text="📂 Carga Masiva de Excel", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
         tk.Label(parent, text="Sube UN SOLO Excel con 2 pestañas: Alumnos + Docentes.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,5))
         tk.Label(parent, text="⚠ OJO: Esto BORRA los alumnos actuales y mete los del Excel. Los docentes se actualizan / agregan, no se borran.", bg="#FFE0E0", fg="#8B0000", font=("Segoe UI", 11, "bold"), padx=12, pady=8).pack(anchor="w", padx=25, pady=10)
-        card = tk.Frame(parent, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=20, pady=20)
-        card.pack(fill="x", padx=25, pady=10)
+        card = tk.Frame(parent, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=20, pady=20); card.pack(fill="x", padx=25, pady=10)
         tk.Label(card, text="Formato del Excel (MISMO ARCHIVO, 2 pestañas):", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w")
         tk.Label(card, text="Pestaña 'Alumnos':  Grado  |  Numero_Lista  |  Nombre_Completo\nEjemplo:  1° Primaria  |  1  |  Juan Perez Lopez\n\nPestaña 'Docentes':  Nombre  |  Usuario  |  Password  |  Rol  |  Grupo_Asignado\nEjemplo:  Profa. Ana  |  ana.1a  |  ANA-1A-2026  |  docente  |  1° Primaria", bg=BEIGE_CLARO, fg=GUINDA, font=("Consolas", 11), justify="left", padx=10, pady=10).pack(fill="x", pady=8)
         lbl_archivo = tk.Label(card, text="Ningún archivo seleccionado", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 10)); lbl_archivo.pack(anchor="w", pady=5)
@@ -755,11 +807,9 @@ def vista_directivo():
         ruta_var = {"ruta": ""}
         def elegir():
             ruta = filedialog.askopenfilename(title="Selecciona tu Excel", filetypes=[("Excel", "*.xlsx *.xls"), ("Todos", "*.*")])
-            if ruta:
-                ruta_var["ruta"] = ruta; lbl_archivo.config(text=f"Archivo: {ruta}")
+            if ruta: ruta_var["ruta"] = ruta; lbl_archivo.config(text=f"Archivo: {ruta}")
         def cargar():
-            if not ruta_var["ruta"]:
-                messagebox.showwarning("Falta archivo", "Primero elige un Excel"); return
+            if not ruta_var["ruta"]: messagebox.showwarning("Falta archivo", "Primero elige un Excel"); return
             cargar_masiva_excel(ruta_var["ruta"], lbl_status)
         tk.Button(card, text="📂 ELEGIR EXCEL", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 11, "bold"), bd=0, pady=10, command=elegir).pack(fill="x", pady=6)
         tk.Button(card, text="🚀 CARGAR ALUMNOS + DOCENTES", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=cargar).pack(fill="x", pady=6)
@@ -783,6 +833,7 @@ def vista_directivo():
         elif op == "Reportes": vista_reportes_director(contenido)
         elif op == "AgregarAlumno": vista_agregar_alumno(contenido)
         elif op == "CargaMasiva": vista_carga_masiva(contenido)
+        elif op == "Diccionario": vista_diccionario(contenido)
         else: tk.Label(contenido, text=f"{op}\n\nMódulo en desarrollo", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 16, "bold")).pack(pady=50)
     def btn_menu(texto, op, color=BLANCO):
         b = tk.Button(menu, text=f"  {texto}", bg="#611232", fg=color, font=("Segoe UI", 11, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", activebackground="#8B1A4A", activeforeground=DORADO)
@@ -794,6 +845,7 @@ def vista_directivo():
     btn_menu("Reportes", "Reportes")
     btn_menu("➕ Agregar Alumno", "AgregarAlumno")
     btn_menu("📂 Carga Masiva Excel", "CargaMasiva")
+    btn_menu("📖 Diccionario Bilingüe", "Diccionario")
     btn_menu("Configuración", "Config")
     tk.Button(menu, text="  Cerrar Sesión", bg="#611232", fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
     mostrar_director("Resumen", botones_director[0])
@@ -803,6 +855,7 @@ ventana.state('zoomed')
 ventana.configure(bg=BEIGE)
 pantalla_login()
 ventana.mainloop()
+
 
 
 # CREATE DATABASE IF NOT EXISTS alerta_temprana;
