@@ -1,4 +1,3 @@
-#Marisol agrego apartado de incidencias
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 from datetime import datetime
@@ -260,6 +259,95 @@ def vista_diccionario(parent):
     if USUARIO_ACTUAL.get("rol") == "director":
         tk.Button(btns, text="🗑️ BORRAR PDF", bg="#8B0000", fg="white", font=("Segoe UI", 11, "bold"), bd=0, pady=12, command=borrar_pdf).pack(side="left", fill="x", expand=True, padx=(5,0))
     cargar_lista()
+
+# ============ MOTOR DE ALERTAS A BASE DE CONDUCTAS + DASHBOARD KPIs ============
+# Campana arriba a la derecha con colores: 🔴 Alto, 🟡 Medio, 🟢 Verde
+# Al abrirla aparecen las alertas, ya sea de FALTA o EVIDENCIA / CONDUCTA
+def obtener_alertas_activas():
+    alertas = []
+    try:
+        con = conectar(); cur = con.cursor(dictionary=True)
+        cur.execute("SELECT * FROM reportes_alerta ORDER BY fecha DESC LIMIT 20")
+        for r in cur.fetchall():
+            nivel = r.get('nivel_riesgo','Medio')
+            if nivel == 'Alto':
+                color, campana, titulo = "#B22222", "🔴", "ALERTA ALTA - Conducta grave"
+            elif nivel == 'Medio':
+                color, campana, titulo = "#C9A86A", "🟡", "ALERTA MEDIA - Conducta / Falta"
+            else:
+                color, campana, titulo = "#2E7D32", "🟢", "AVISO - Evidencia leve"
+            alertas.append({"fecha": str(r['fecha']), "tipo": "Conducta / Reporte", "alumno": r['alumno_nombre'], "grupo": r['grado_grupo'], "docente": r['docente'], "detalle": f"{r['tipo']} | {r['descripcion']} | Acción: {r['accion_propuesta']}", "nivel": nivel, "color": color, "campana": campana, "titulo": titulo})
+        cur.execute("SELECT * FROM justificantes ORDER BY fecha_falta DESC LIMIT 10")
+        for r in cur.fetchall():
+            alertas.append({"fecha": str(r['fecha_falta']), "tipo": "Falta - Justificante", "alumno": r['alumno_nombre'], "grupo": r['grado_grupo'], "docente": r['docente'], "detalle": f"{r['motivo']} | {r['num_dias']} día(s) | Tutor: {r['tutor']} | {r['descripcion']}", "nivel": "Medio", "color": "#C9A86A", "campana": "🟡", "titulo": "FALTA JUSTIFICADA"})
+        cur.execute("""SELECT a.nombre_completo, g.nombre as grupo, s.fecha FROM asistencia s JOIN alumnos a ON a.id=s.alumno_id JOIN grados g ON g.id=a.grado_id WHERE s.fecha=CURRENT_DATE AND s.estado='Falto' LIMIT 10""")
+        for r in cur.fetchall():
+            alertas.append({"fecha": str(r['fecha']), "tipo": "Falta - Sin justificar", "alumno": r['nombre_completo'], "grupo": r['grupo'], "docente": "Sistema", "detalle": "Faltó hoy y no tiene justificante todavía", "nivel": "Alto", "color": "#B22222", "campana": "🔴", "titulo": "FALTA SIN JUSTIFICAR"})
+        con.close()
+    except Exception as e:
+        print("Error alertas:", e)
+    return alertas
+
+def vista_motor_alertas(parent):
+    tk.Label(parent, text="🔔 Motor de Alertas - A base de Conductas", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
+    tk.Label(parent, text="Campanas de colores  •  🔴 Alto  •  🟡 Medio  •  🟢 Bajo / Evidencia", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,10))
+    alertas = obtener_alertas_activas()
+    rojas = sum(1 for a in alertas if a['nivel']=='Alto')
+    amarillas = sum(1 for a in alertas if a['nivel']=='Medio')
+    verdes = sum(1 for a in alertas if a['nivel']=='Bajo')
+    kpi = tk.Frame(parent, bg=BLANCO); kpi.pack(fill="x", padx=25, pady=5)
+    for emoji, titulo, num, color in [("🔴","ALERTAS ALTAS",rojas,"#B22222"),("🟡","ALERTAS MEDIAS",amarillas,"#C9A86A"),("🟢","EVIDENCIAS / LEVES",verdes,"#2E7D32"),("🔔","TOTAL ALERTAS",len(alertas),GUINDA)]:
+        f = tk.Frame(kpi, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=12, pady=10); f.pack(side="left", expand=True, fill="x", padx=5)
+        tk.Frame(f, bg=color, height=4).pack(fill="x")
+        tk.Label(f, text=f"{emoji} {titulo}", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(5,0))
+        tk.Label(f, text=str(num), bg=BLANCO, fg=color, font=("Segoe UI", 22, "bold")).pack(anchor="w")
+    canvas = tk.Canvas(parent, bg=BLANCO, highlightthickness=0)
+    scrollbar = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+    scroll = tk.Frame(canvas, bg=BLANCO)
+    scroll.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+    win = canvas.create_window((0,0), window=scroll, anchor="nw")
+    canvas.bind("<Configure>", lambda e: canvas.itemconfig(win, width=e.width))
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.pack(side="left", fill="both", expand=True, padx=25, pady=10); scrollbar.pack(side="right", fill="y")
+    if not alertas:
+        tk.Label(scroll, text="✅ Sin alertas por ahora. Todo en orden.", bg=BLANCO, fg="#2E7D32", font=("Segoe UI", 14, "bold")).pack(pady=30)
+    for a in alertas:
+        card = tk.Frame(scroll, bg=BEIGE_CLARO, highlightbackground=a['color'], highlightthickness=2, padx=12, pady=10)
+        card.pack(fill="x", pady=5)
+        tk.Label(card, text=f"{a['campana']} {a['titulo']}  •  {a['fecha']}", bg=BEIGE_CLARO, fg=a['color'], font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        tk.Label(card, text=f"Alumno: {a['alumno']}  •  Grupo: {a['grupo']}  •  Docente: {a['docente']}", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(card, text=f"Tipo: {a['tipo']}", bg=BEIGE_CLARO, fg="#8A7A70", font=("Segoe UI", 10)).pack(anchor="w")
+        tk.Label(card, text=a['detalle'], bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 10), wraplength=800, justify="left").pack(anchor="w", pady=3)
+    canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
+
+def vista_dashboard_kpis(parent):
+    tk.Label(parent, text="📊 Dashboard - KPIs Generales", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 20, "bold")).pack(anchor="w", padx=25, pady=(20,2))
+    tk.Label(parent, text="Datos reales de la base de datos - Hoy", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 11)).pack(anchor="w", padx=25, pady=(0,10))
+    try:
+        con = conectar(); cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM alumnos"); total_alumnos = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM asistencia WHERE fecha=CURRENT_DATE AND estado='Asistio'"); asist = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM asistencia WHERE fecha=CURRENT_DATE AND estado='Falto'"); falt = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM asistencia WHERE fecha=CURRENT_DATE AND estado='Retardo'"); ret = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM reportes_alerta WHERE nivel_riesgo='Alto'"); alto = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM justificantes"); just = cur.fetchone()[0]
+        con.close()
+    except: total_alumnos, asist, falt, ret, alto, just = 0,0,0,0,0,0
+    porc_asist = round((asist / total_alumnos * 100),1) if total_alumnos>0 else 0
+    kpi = tk.Frame(parent, bg=BLANCO); kpi.pack(fill="x", padx=25, pady=5)
+    datos_kpi = [("👨‍🎓 TOTAL ALUMNOS", total_alumnos, GUINDA, "En el sistema"), ("✅ ASISTENCIA HOY", f"{asist}  ({porc_asist}%)", "#2E7D32", "Presentes hoy"), ("❌ FALTAS HOY", falt, "#B22222", "Sin justificar"), ("⏰ RETARDOS", ret, "#C9A86A", "Llegaron tarde"), ("🔴 ALERTAS ALTAS", alto, "#B22222", "Conductas graves"), ("📄 JUSTIFICANTES", just, GUINDA, "Total registrados")]
+    for titulo, num, color, sub in datos_kpi:
+        f = tk.Frame(kpi, bg=BLANCO, highlightbackground="#EADDC8", highlightthickness=1, padx=12, pady=12); f.pack(side="left", expand=True, fill="x", padx=4)
+        tk.Frame(f, bg=color, height=4).pack(fill="x")
+        tk.Label(f, text=titulo, bg=BLANCO, fg=GUINDA, font=("Segoe UI", 8, "bold")).pack(anchor="w", pady=(5,0))
+        tk.Label(f, text=str(num), bg=BLANCO, fg=color, font=("Segoe UI", 18, "bold")).pack(anchor="w")
+        tk.Label(f, text=sub, bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 8)).pack(anchor="w")
+    barra_frame = tk.Frame(parent, bg=BEIGE_CLARO, padx=15, pady=12); barra_frame.pack(fill="x", padx=25, pady=15)
+    tk.Label(barra_frame, text=f"📈 Asistencia hoy: {porc_asist}%  •  {asist} de {total_alumnos} alumnos", bg=BEIGE_CLARO, fg=GUINDA, font=("Segoe UI", 11, "bold")).pack(anchor="w")
+    barra_bg = tk.Frame(barra_frame, bg="white", height=22); barra_bg.pack(fill="x", pady=8)
+    if total_alumnos>0:
+        tk.Frame(barra_bg, bg="#2E7D32", width=int(600 * porc_asist/100)).pack(side="left", fill="y")
+    tk.Label(parent, text="Tip: Usa el menú de la izquierda en '🔔 Motor de Alertas' para ver el detalle de cada campana.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 9)).pack(anchor="w", padx=25)
 
 GUINDA = "#4E0F27"; DORADO = "#C9A86A"; BEIGE = "#F5E6D3"; BLANCO = "#FDF8F0"; BEIGE_CLARO = "#F5F0E6"; BORDER = "#D9C5A0"
 GRADOS = cargar_datos_db()
@@ -565,6 +653,8 @@ def vista_docente():
         elif op == "Justificantes": crear_vista_justificante(contenido)
         elif op == "Reportes": crear_vista_reportes(contenido)
         elif op == "Diccionario": vista_diccionario(contenido)
+        elif op == "Alertas": vista_motor_alertas(contenido)
+        elif op == "Dashboard": vista_dashboard_kpis(contenido)
         elif op == "Mi Grupo":
             header = tk.Frame(contenido, bg=BLANCO); header.pack(fill="x", padx=30, pady=(25,10))
             tk.Label(header, text=f"Mi Grupo - {USUARIO_ACTUAL['grupo']}", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 22, "bold")).pack(anchor="w")
@@ -589,7 +679,15 @@ def vista_docente():
     btn_menu("Reportes Alertas", "Reportes")
     btn_menu("📖 Diccionario Bilingüe", "Diccionario")
     btn_menu("Calificaciones", "Calificaciones")
+    btn_menu("🔔 Motor de Alertas", "Alertas")
+    btn_menu("📊 Dashboard KPIs", "Dashboard")
     tk.Button(menu, text="  Cerrar Sesión", bg=GUINDA, fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
+    # Campana superior derecha - Docente
+    try:
+        alertas_top = obtener_alertas_activas()
+        rojas_top = sum(1 for a in alertas_top if a['nivel']=='Alto')
+        tk.Button(ventana, text=f"🔔 {len(alertas_top)}  •  🔴 {rojas_top}", bg="#B22222" if rojas_top>0 else "#2E7D32", fg="white", font=("Segoe UI", 10, "bold"), bd=0, padx=12, pady=5, cursor="hand2", command=lambda: mostrar_opcion("Alertas", botones_docente[6])).place(relx=1.0, x=-10, y=5, anchor="ne")
+    except: pass
     mostrar_opcion("Mi Grupo", botones_docente[0])
 
 # ===== DIRECTOR =====
@@ -881,6 +979,8 @@ def vista_directivo():
         elif op == "AgregarAlumno": vista_agregar_alumno(contenido)
         elif op == "CargaMasiva": vista_carga_masiva(contenido)
         elif op == "Diccionario": vista_diccionario(contenido)
+        elif op == "Alertas": vista_motor_alertas(contenido)
+        elif op == "Dashboard": vista_dashboard_kpis(contenido)
         else: tk.Label(contenido, text=f"{op}\n\nMódulo en desarrollo", bg=BLANCO, fg=GUINDA, font=("Segoe UI", 16, "bold")).pack(pady=50)
     def btn_menu(texto, op, color=BLANCO):
         b = tk.Button(menu, text=f"  {texto}", bg="#611232", fg=color, font=("Segoe UI", 11, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", activebackground="#8B1A4A", activeforeground=DORADO)
@@ -894,7 +994,15 @@ def vista_directivo():
     btn_menu("📂 Carga Masiva Excel", "CargaMasiva")
     btn_menu("📖 Diccionario Bilingüe", "Diccionario")
     btn_menu("Configuración", "Config")
+    btn_menu("🔔 Motor de Alertas", "Alertas")
+    btn_menu("📊 Dashboard KPIs", "Dashboard")
     tk.Button(menu, text="  Cerrar Sesión", bg="#611232", fg=DORADO, font=("Segoe UI", 10, "bold"), bd=0, anchor="w", pady=15, cursor="hand2", command=pantalla_login).pack(side="bottom", fill="x", padx=10, pady=20)
+    # Campana superior derecha - Director
+    try:
+        alertas_top = obtener_alertas_activas()
+        rojas_top = sum(1 for a in alertas_top if a['nivel']=='Alto')
+        tk.Button(ventana, text=f"🔔 {len(alertas_top)}  •  🔴 {rojas_top}", bg="#B22222" if rojas_top>0 else "#2E7D32", fg="white", font=("Segoe UI", 10, "bold"), bd=0, padx=12, pady=5, cursor="hand2", command=lambda: mostrar_director("Alertas", botones_director[8])).place(relx=1.0, x=-10, y=5, anchor="ne")
+    except: pass
     mostrar_director("Resumen", botones_director[0])
 
 ventana = tk.Tk()
