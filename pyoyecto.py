@@ -1,3 +1,4 @@
+#Marisol agrego apartado de incidencias
 import tkinter as tk
 from tkinter import messagebox, ttk, filedialog
 from datetime import datetime
@@ -728,6 +729,52 @@ def vista_directivo():
         tk.Button(filtros, text="🔍 BUSCAR", bg=GUINDA, fg="white", font=("Segoe UI", 9, "bold"), bd=0, padx=14, pady=4, command=cargar).pack(side="left", padx=8)
         tk.Button(filtros, text="🔄 ACTUALIZAR", bg=DORADO, fg=GUINDA, font=("Segoe UI", 9, "bold"), bd=0, padx=12, pady=4, command=cargar).pack(side="left", padx=4)
         cargar()
+        # ===== IMPRIMIR REPORTE QUE MANDÓ EL DOCENTE =====
+        def imprimir_reporte_seleccionado():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Falta", "Primero selecciona un reporte en la tabla para imprimirlo")
+                return
+            vals = tree.item(sel[0])["values"]
+            fecha, tipo, alumno, grupo, docente, detalle_txt = vals[0], vals[1], vals[2], vals[3], vals[4], vals[5]
+            carpeta = "reportes_impresos"
+            if not os.path.exists(carpeta):
+                os.makedirs(carpeta)
+            nombre_archivo = f"Reporte_{str(alumno).replace(' ', '_')}_{str(fecha).replace('/', '-')}.html"
+            ruta = os.path.join(carpeta, nombre_archivo)
+            html = f"""<html><head><meta charset='utf-8'>
+            <style>
+                body {{ font-family: Arial; margin: 40px; color: #4E0F27; }}
+                .header {{ background: #611232; color: white; padding: 20px; text-align: center; }}
+                .header h1 {{ margin: 0; }}
+                .caja {{ border: 2px solid #C9A86A; padding: 20px; margin-top: 20px; }}
+                .dato {{ margin: 10px 0; font-size: 16px; }}
+                .dato b {{ color: #611232; }}
+                .detalle {{ background: #F5F0E6; padding: 15px; margin-top: 15px; font-size: 15px; }}
+                .firma {{ margin-top: 60px; display: flex; justify-content: space-between; }}
+                .firma div {{ border-top: 1px solid #000; width: 200px; text-align: center; padding-top: 5px; }}
+                @media print {{ .no-print {{ display: none; }} }}
+            </style></head><body>
+            <div class='header'><h1>PRIMARIA NEZAHUALCÓYOTL</h1><p>Reporte de Alerta Temprana</p></div>
+            <div class='caja'>
+                <div class='dato'><b>Alumno:</b> {alumno}</div>
+                <div class='dato'><b>Grupo:</b> {grupo}</div>
+                <div class='dato'><b>Docente que lo reportó:</b> {docente}</div>
+                <div class='dato'><b>Fecha:</b> {fecha}</div>
+                <div class='dato'><b>Tipo:</b> {tipo}</div>
+                <div class='detalle'><b>Detalle completo:</b><br><br>{detalle_txt}</div>
+            </div>
+            <div class='firma'><div>Docente<br>{docente}</div><div>Director<br>Director General</div></div>
+            <br><center class='no-print'><button onclick='window.print()' style='padding:12px 30px;background:#611232;color:white;border:none;font-size:16px;cursor:pointer;'>🖨️ IMPRIMIR AHORA</button></center>
+            </body></html>"""
+            with open(ruta, "w", encoding="utf-8") as f:
+                f.write(html)
+            webbrowser.open(os.path.abspath(ruta))
+            messagebox.showinfo("Listo", f"Se abrió el reporte de {alumno} para imprimir.\n\nEn el navegador dale a IMPRIMIR AHORA o Ctrl+P")
+        btns_imprimir = tk.Frame(parent, bg=BLANCO)
+        btns_imprimir.pack(fill="x", padx=25, pady=(0,10))
+        tk.Button(btns_imprimir, text="🖨️ IMPRIMIR REPORTE SELECCIONADO", bg="#611232", fg="white", font=("Segoe UI", 12, "bold"), bd=0, pady=12, command=imprimir_reporte_seleccionado).pack(fill="x")
+        tk.Label(btns_imprimir, text="Selecciona un reporte en la tabla de arriba y luego dale a IMPRIMIR. Se abre en el navegador y ahí lo imprimes o lo guardas como PDF.", bg=BLANCO, fg="#8A7A70", font=("Segoe UI", 9)).pack(pady=5)
 
     def vista_control_docentes(parent):
         GUINDA_D = "#7A1020"; GUINDA_CLARO = "#A83246"; CREMA = "#FFF8E7"
